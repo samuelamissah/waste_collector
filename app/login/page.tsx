@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Swal from 'sweetalert2'
 
 export default function LoginPage() {
   const supabase = createClient()
@@ -12,11 +13,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
-    setErrorMessage(null)
     setLoading(true)
 
     const { error } = await supabase.auth.signInWithPassword({
@@ -25,7 +24,12 @@ export default function LoginPage() {
     })
 
     if (error) {
-      setErrorMessage(error.message)
+      await Swal.fire({
+        icon: 'error',
+        title: 'Login failed',
+        text: error.message,
+        confirmButtonColor: '#15803d',
+      })
       setLoading(false)
       return
     }
@@ -36,8 +40,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-10">
+    <div className="relative min-h-screen overflow-hidden bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-24 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-green-500/20 blur-3xl" />
+        <div className="absolute top-48 -left-24 h-80 w-80 rounded-full bg-emerald-400/20 blur-3xl" />
+        <div className="absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-lime-400/15 blur-3xl" />
+      </div>
+
+      <main className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-10">
         <div className="flex items-center justify-between">
           <Link href="/" className="text-sm font-semibold tracking-tight">
             Waste Collector
@@ -60,12 +70,6 @@ export default function LoginPage() {
                 Sign in to access your dashboard.
               </p>
             </div>
-
-            {errorMessage && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {errorMessage}
-              </div>
-            )}
 
             <form onSubmit={handleLogin} className="mt-6 space-y-4">
               <div className="space-y-2">

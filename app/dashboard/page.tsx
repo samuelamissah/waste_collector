@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import PickupForm from '@/app/components/pickup-form'
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import QRCode from 'qrcode'
 import Link from 'next/link'
@@ -52,11 +52,16 @@ function formatDate(value: string | null | undefined) {
   return date.toLocaleString()
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Record<string, string | string[] | undefined>
+  searchParams?: Promise<Record<string, string | string[] | undefined>> | Record<string, string | string[] | undefined>
 }) {
+  noStore()
   const supabase = await createClient()
   const {
     data: { user },
@@ -64,16 +69,59 @@ export default async function DashboardPage({
 
   if (!user) redirect('/login?next=/dashboard')
 
-  const { data: profileRow } = await supabase
+  const sp = (await Promise.resolve(searchParams)) ?? {}
+
+  const initialProfileFetch = await supabase
     .from('profiles')
     .select('id, full_name, role, eco_points, bin_id')
     .eq('id', user.id)
     .maybeSingle()
 
+  let profileRow = initialProfileFetch.data ?? null
+  let profileReadError = initialProfileFetch.error?.message ?? null
+
+  if (!profileRow && !profileReadError) {
+    const metadata = user.user_metadata as Record<string, unknown>
+    const fullNameFromMetadata =
+      (typeof metadata?.full_name === 'string' && metadata.full_name.trim()
+        ? metadata.full_name.trim()
+        : typeof metadata?.name === 'string' && metadata.name.trim()
+          ? metadata.name.trim()
+          : null) ?? null
+
+    await supabase
+      .from('profiles')
+      .upsert(
+        {
+          id: user.id,
+          full_name: fullNameFromMetadata,
+          role: 'user',
+        },
+        { onConflict: 'id', ignoreDuplicates: true }
+      )
+
+    const refetch = await supabase
+      .from('profiles')
+      .select('id, full_name, role, eco_points, bin_id')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    profileRow = refetch.data ?? null
+    profileReadError = refetch.error?.message ?? null
+  }
+
   const profile = (profileRow ?? null) as Profile | null
   const role = profile?.role ?? 'user'
 
-  const displayName = profile?.full_name ?? user.email ?? user.id.slice(0, 8)
+  const metadata = user.user_metadata as Record<string, unknown>
+  const metadataName =
+    (typeof metadata?.full_name === 'string' && metadata.full_name.trim()
+      ? metadata.full_name.trim()
+      : typeof metadata?.name === 'string' && metadata.name.trim()
+        ? metadata.name.trim()
+        : null) ?? null
+
+  const displayName = profile?.full_name?.trim() ? profile.full_name : metadataName ?? 'User'
   const roleLabel = role === 'admin' ? 'Admin' : role === 'collector' ? 'Collector' : 'Resident'
 
   async function signOut() {
@@ -107,15 +155,24 @@ export default async function DashboardPage({
 
     const { data: requestRow } = await supabase
       .from('pickup_requests')
-      .select('id, assigned_collector_id, status, bin_id')
+      .select('*')
       .eq('id', requestId)
       .maybeSingle()
 
     if (!requestRow) return
-    if (!isAdmin && requestRow.assigned_collector_id !== user.id) return
-    if (requestRow.status === 'completed') return
+    const request = requestRow as PickupRequest & { bin_code?: string | null }
+    if (!isAdmin && request.assigned_collector_id !== user.id) return
+    if (request.status === 'completed') return
     if (!isAdmin) {
-      const expectedBin = String(requestRow.bin_id ?? '').trim()
+      let expectedBin = String(request.bin_code ?? '').trim()
+      if (!expectedBin && request.bin_id && isUuid(String(request.bin_id))) {
+        const binLookup = await supabase.from('bins').select('code').eq('id', request.bin_id).maybeSingle()
+        expectedBin =
+          !binLookup.error && typeof (binLookup.data as { code?: string | null } | null)?.code === 'string'
+            ? String((binLookup.data as { code?: string | null }).code).trim()
+            : ''
+      }
+      if (!expectedBin) expectedBin = String(request.bin_id ?? '').trim()
       if (!expectedBin || binCode !== expectedBin) {
         redirect('/dashboard?error=bin_code_mismatch')
       }
@@ -153,17 +210,25 @@ export default async function DashboardPage({
 
     const { data: requestRow } = await supabase
       .from('pickup_requests')
-      .select('id, user_id, waste_type, status, assigned_collector_id, bin_id')
+      .select('*')
       .eq('id', requestId)
       .maybeSingle()
 
-    const request = requestRow as PickupRequest | null
+    const request = requestRow as (PickupRequest & { bin_code?: string | null }) | null
     if (!request) return
     if (!isAdmin && request.assigned_collector_id !== user.id) return
     if (request.status === 'completed') return
 
     if (!isAdmin) {
-      const expectedBin = String(request.bin_id ?? '').trim()
+      let expectedBin = String(request.bin_code ?? '').trim()
+      if (!expectedBin && request.bin_id && isUuid(String(request.bin_id))) {
+        const binLookup = await supabase.from('bins').select('code').eq('id', request.bin_id).maybeSingle()
+        expectedBin =
+          !binLookup.error && typeof (binLookup.data as { code?: string | null } | null)?.code === 'string'
+            ? String((binLookup.data as { code?: string | null }).code).trim()
+            : ''
+      }
+      if (!expectedBin) expectedBin = String(request.bin_id ?? '').trim()
       if (!expectedBin || binCode !== expectedBin) {
         redirect('/dashboard?error=bin_code_mismatch')
       }
@@ -254,7 +319,7 @@ export default async function DashboardPage({
   }
 
   if (role === 'collector') {
-    const errorParam = searchParams?.error
+    const errorParam = sp.error
     const error = typeof errorParam === 'string' ? errorParam : ''
     const { data: assignedRequests } = await supabase
       .from('pickup_requests')
@@ -264,6 +329,17 @@ export default async function DashboardPage({
       .limit(50)
 
     const requests = (assignedRequests ?? []) as PickupRequest[]
+    const collectorBinIds = [...new Set(requests.map((r) => r.bin_id).filter((v): v is string => !!v))]
+    const { data: collectorBins, error: collectorBinsError } =
+      collectorBinIds.length > 0
+        ? await supabase.from('bins').select('id, code').in('id', collectorBinIds)
+        : await Promise.resolve({ data: [] as Array<{ id: string; code: string | null }>, error: null as unknown })
+
+    const collectorBinCodeById = new Map<string, string>(
+      !collectorBinsError
+        ? (collectorBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : b.id])
+        : []
+    )
 
     return (
       <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
@@ -285,10 +361,22 @@ export default async function DashboardPage({
                 Dashboard
               </Link>
               <Link
+                href="/requests"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                History
+              </Link>
+              <Link
                 href="/reports"
                 className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
               >
                 Reports
+              </Link>
+              <Link
+                href="/profile"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Profile
               </Link>
               <form action={signOut}>
                 <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
@@ -340,8 +428,14 @@ export default async function DashboardPage({
                     requests.map((r) => (
                       <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
                         <td className="py-4 pr-4">
-                          <div className="font-medium">{r.address?.trim() || r.bin_id || r.id.slice(0, 8)}</div>
-                          {r.bin_id && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{r.bin_id}</div>}
+                          <div className="font-medium">
+                            {r.address?.trim() || (r.bin_id ? collectorBinCodeById.get(r.bin_id) ?? r.bin_id : '') || r.id.slice(0, 8)}
+                          </div>
+                          {r.bin_id && (
+                            <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                              {collectorBinCodeById.get(r.bin_id) ?? r.bin_id}
+                            </div>
+                          )}
                         </td>
                         <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
                         <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
@@ -353,7 +447,7 @@ export default async function DashboardPage({
                               <input
                                 className="w-44 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
                                 name="binCode"
-                                placeholder="Enter bin code"
+                                placeholder="Enter bin code or UUID"
                               />
                               <button
                                 className="rounded-lg border border-black/[.08] px-3 py-2 transition-colors hover:bg-black/[.04] disabled:opacity-50 dark:border-white/[.145] dark:hover:bg-white/[.08]"
@@ -368,7 +462,7 @@ export default async function DashboardPage({
                               <input
                                 className="w-44 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
                                 name="binCode"
-                                placeholder="Enter bin code"
+                                placeholder="Enter bin code or UUID"
                               />
                               <button
                                 className="rounded-lg bg-green-700 px-3 py-2 text-white disabled:bg-zinc-300"
@@ -393,7 +487,7 @@ export default async function DashboardPage({
   }
 
   if (role === 'admin') {
-    const statusParam = searchParams?.status
+    const statusParam = sp.status
     const status =
       typeof statusParam === 'string' && statusParam.trim() ? statusParam.trim() : 'all'
 
@@ -428,6 +522,24 @@ export default async function DashboardPage({
       }>
 
     const reports = (!reportsError ? (reportsData ?? []) : []) as Report[]
+    const adminBinIds = [...new Set(requests.map((r) => r.bin_id).filter((v): v is string => !!v))]
+    const { data: adminBins, error: adminBinsError } =
+      adminBinIds.length > 0
+        ? await supabase.from('bins').select('id, code').in('id', adminBinIds)
+        : await Promise.resolve({ data: [] as Array<{ id: string; code: string | null }>, error: null as unknown })
+
+    const adminBinCodeById = new Map<string, string>(
+      !adminBinsError ? (adminBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : b.id]) : []
+    )
+    const reporterIds = [...new Set(reports.map((r) => r.user_id))]
+    const { data: reporterProfiles } =
+      reporterIds.length > 0
+        ? await supabase.from('profiles').select('id, full_name').in('id', reporterIds)
+        : await Promise.resolve({ data: [] as Array<{ id: string; full_name: string | null }> })
+
+    const reporterNameById = new Map(
+      (reporterProfiles ?? []).map((p) => [p.id, p.full_name?.trim() ? p.full_name : 'User'])
+    )
 
     const [{ count: totalCount }, { count: pendingCount }, { count: assignedCount }, { count: verifiedCount }, { count: completedCount }] =
       await Promise.all([
@@ -458,10 +570,22 @@ export default async function DashboardPage({
                 Dashboard
               </Link>
               <Link
+                href="/requests"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                History
+              </Link>
+              <Link
                 href="/reports"
                 className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
               >
                 Reports
+              </Link>
+              <Link
+                href="/profile"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Profile
               </Link>
               <form action={signOut}>
                 <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
@@ -551,7 +675,9 @@ export default async function DashboardPage({
                     requests.map((r) => (
                       <tr key={r.id} className="border-b border-black/[.08] align-top dark:border-white/[.145]">
                         <td className="py-4 pr-4">{r.id.slice(0, 8)}</td>
-                        <td className="py-4 pr-4">{r.address?.trim() || r.bin_id || ''}</td>
+                        <td className="py-4 pr-4">
+                          {r.address?.trim() || (r.bin_id ? adminBinCodeById.get(r.bin_id) ?? r.bin_id : '') || ''}
+                        </td>
                         <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
                         <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
                         <td className="py-4 pr-4">
@@ -610,7 +736,7 @@ export default async function DashboardPage({
                 reports.map((r) => (
                   <div key={r.id} className="rounded-2xl border border-black/[.08] p-4 dark:border-white/[.145]">
                     <div className="flex items-center justify-between gap-4">
-                      <div className="text-sm font-medium">{r.user_id.slice(0, 8)}</div>
+                      <div className="text-sm font-medium">{reporterNameById.get(r.user_id) ?? 'User'}</div>
                       <div className="text-xs text-zinc-600 dark:text-zinc-300">{formatDate(r.created_at)}</div>
                     </div>
                     <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">{r.message ?? ''}</div>
@@ -644,7 +770,16 @@ export default async function DashboardPage({
     created_at?: string | null
   }>
 
-  const binCode = String(profile?.bin_id ?? '').trim()
+  const rawBinId = String(profile?.bin_id ?? '').trim()
+  let binCode = rawBinId
+  if (rawBinId && isUuid(rawBinId)) {
+    const binLookup = await supabase.from('bins').select('code').eq('id', rawBinId).maybeSingle()
+    const code =
+      !binLookup.error && typeof (binLookup.data as { code?: string | null } | null)?.code === 'string'
+        ? String((binLookup.data as { code?: string | null }).code).trim()
+        : ''
+    if (code) binCode = code
+  }
   const binQrSvg = binCode ? await QRCode.toString(binCode, { type: 'svg', margin: 1 }) : ''
 
   return (
@@ -667,10 +802,22 @@ export default async function DashboardPage({
               Dashboard
             </Link>
             <Link
+              href="/requests"
+              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+            >
+              History
+            </Link>
+            <Link
               href="/reports"
               className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
             >
               Reports
+            </Link>
+            <Link
+              href="/profile"
+              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+            >
+              Profile
             </Link>
             <form action={signOut}>
               <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
@@ -682,6 +829,13 @@ export default async function DashboardPage({
       </header>
 
       <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
+        {profileReadError && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Could not read your profile from the database: {profileReadError}. If this mentions a missing column
+            (for example profiles.bin_id), run supabase_profiles_schema.sql. If it mentions RLS, run
+            supabase_auth_profiles.sql. Then refresh.
+          </div>
+        )}
         <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
           <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
@@ -690,6 +844,18 @@ export default async function DashboardPage({
           <div className="mt-4 flex flex-wrap gap-2">
             <a className="rounded-lg bg-green-700 px-4 py-3 text-sm text-white" href="#request-pickup">
               Request pickup
+            </a>
+            <Link
+              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              href="/requests"
+            >
+              View history
+            </Link>
+            <a
+              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              href="#bin-info"
+            >
+              Bin info
             </a>
             <Link
               className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
@@ -715,9 +881,20 @@ export default async function DashboardPage({
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 md:col-span-2 dark:border-white/[.145] dark:bg-black">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Recent requests</h2>
-              <a className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50" href="#request-pickup">
-                New request
-              </a>
+              <div className="flex items-center gap-4">
+                <Link
+                  className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                  href="/requests"
+                >
+                  View all
+                </Link>
+                <a
+                  className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                  href="#request-pickup"
+                >
+                  New request
+                </a>
+              </div>
             </div>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -751,7 +928,10 @@ export default async function DashboardPage({
             </div>
           </div>
 
-          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+          <div
+            id="bin-info"
+            className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black"
+          >
             <h2 className="text-lg font-semibold">Your bin code</h2>
             <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">Bin code</div>
             <div className="mt-1 text-xl font-semibold">{binCode || 'Not set'}</div>

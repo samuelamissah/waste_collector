@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Swal from 'sweetalert2'
 
 export default function SignupPage() {
   const supabase = createClient()
@@ -13,11 +14,9 @@ export default function SignupPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault()
-    setErrorMessage(null)
     setLoading(true)
 
     const { data, error } = await supabase.auth.signUp({
@@ -29,17 +28,120 @@ export default function SignupPage() {
     })
 
     if (error) {
-      setErrorMessage(error.message)
+      const message = error.message
+      const lower = message.toLowerCase()
+      const isExistingAccount =
+        lower.includes('already registered') ||
+        lower.includes('already exists') ||
+        lower.includes('user already') ||
+        lower.includes('email address has already been registered') ||
+        lower.includes('duplicate key') ||
+        lower.includes('user_exists')
+
+      if (isExistingAccount) {
+        const result = await Swal.fire({
+          icon: 'info',
+          title: 'Account already exists',
+          text: 'An account with this email already exists. Log in instead.',
+          confirmButtonColor: '#15803d',
+          confirmButtonText: 'Go to login',
+          showCancelButton: true,
+          cancelButtonText: 'Use a different email',
+        })
+
+        if (result.isConfirmed) router.push('/login')
+        setLoading(false)
+        return
+      }
+
+      await Swal.fire({
+        icon: 'error',
+        title: 'Sign up failed',
+        text: message,
+        confirmButtonColor: '#15803d',
+      })
       setLoading(false)
       return
     }
 
-    if (data.user) {
-      await supabase.from('profiles').upsert({
-        id: data.user.id,
-        full_name: fullName,
-        email,
-        role: 'user'
+    const identities = (data.user as unknown as { identities?: unknown })?.identities
+    const identityCount = Array.isArray(identities) ? identities.length : null
+
+    if (data.user && identityCount === 0) {
+      const result = await Swal.fire({
+        icon: 'info',
+        title: 'Account already exists',
+        text: 'An account with this email already exists. Log in instead.',
+        confirmButtonColor: '#15803d',
+        confirmButtonText: 'Go to login',
+        showCancelButton: true,
+        cancelButtonText: 'Use a different email',
+      })
+
+      if (result.isConfirmed) router.push('/login')
+      setLoading(false)
+      return
+    }
+
+    if (data.user && data.session) {
+      const profileUpsert = await supabase
+        .from('profiles')
+        .upsert(
+          {
+            id: data.user.id,
+            full_name: fullName,
+            role: 'user',
+          },
+          { onConflict: 'id' }
+        )
+
+      if (profileUpsert.error) {
+        const message = profileUpsert.error.message
+        const extra =
+          message.toLowerCase().includes('row-level security') || message.toLowerCase().includes('rls')
+            ? 'Your profiles table is blocking inserts. Apply the SQL in supabase_auth_profiles.sql in your Supabase SQL editor.'
+            : 'Check that profiles has an insert policy for auth users, or use a database trigger to create profiles automatically.'
+
+        await Swal.fire({
+          icon: 'warning',
+          title: 'Account created, but profile not saved',
+          text: `${message}\n\n${extra}`,
+          confirmButtonColor: '#15803d',
+        })
+      } else {
+        const profileCheck = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', data.user.id)
+          .maybeSingle()
+
+        if (profileCheck.error || !profileCheck.data) {
+          await Swal.fire({
+            icon: 'warning',
+            title: 'Account created, but profile not visible',
+            text:
+              profileCheck.error?.message ??
+              'This is usually caused by missing Row Level Security policies on profiles.',
+            confirmButtonColor: '#15803d',
+          })
+        }
+      }
+    }
+
+    if (!data.session) {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Check your email',
+        text: 'Confirm your email, then come back to log in. Your profile will be created after you sign in (or automatically if you enable the provided profiles trigger).',
+        confirmButtonColor: '#15803d',
+      })
+    } else {
+      await Swal.fire({
+        icon: 'success',
+        title: 'Account created',
+        text: 'Redirecting you to login.',
+        timer: 1200,
+        showConfirmButton: false,
       })
     }
 
@@ -48,8 +150,14 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-10">
+    <div className="relative min-h-screen overflow-hidden bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-24 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-green-500/20 blur-3xl" />
+        <div className="absolute top-52 -right-20 h-80 w-80 rounded-full bg-emerald-400/20 blur-3xl" />
+        <div className="absolute -bottom-32 left-0 h-96 w-96 rounded-full bg-lime-400/15 blur-3xl" />
+      </div>
+
+      <main className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-6 py-10">
         <div className="flex items-center justify-between">
           <Link href="/" className="text-sm font-semibold tracking-tight">
             Waste Collector
@@ -73,12 +181,6 @@ export default function SignupPage() {
                 are assigned by admins in Supabase.
               </p>
             </div>
-
-            {errorMessage && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {errorMessage}
-              </div>
-            )}
 
             <form onSubmit={handleSignup} className="mt-6 space-y-4">
               <div className="space-y-2">
