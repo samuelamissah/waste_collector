@@ -5,10 +5,12 @@ import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Swal from 'sweetalert2'
+import { useToast } from '../components/toast'
 
 export default function SignupPage() {
   const supabase = createClient()
   const router = useRouter()
+  const toast = useToast()
 
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
@@ -54,12 +56,7 @@ export default function SignupPage() {
         return
       }
 
-      await Swal.fire({
-        icon: 'error',
-        title: 'Sign up failed',
-        text: message,
-        confirmButtonColor: '#15803d',
-      })
+      toast.error(message, 'Sign up failed')
       setLoading(false)
       return
     }
@@ -102,12 +99,7 @@ export default function SignupPage() {
             ? 'Your profiles table is blocking inserts. Apply the SQL in supabase_auth_profiles.sql in your Supabase SQL editor.'
             : 'Check that profiles has an insert policy for auth users, or use a database trigger to create profiles automatically.'
 
-        await Swal.fire({
-          icon: 'warning',
-          title: 'Account created, but profile not saved',
-          text: `${message}\n\n${extra}`,
-          confirmButtonColor: '#15803d',
-        })
+        toast.warning(`${message}\n\n${extra}`, 'Account created, but profile not saved')
       } else {
         const profileCheck = await supabase
           .from('profiles')
@@ -116,33 +108,21 @@ export default function SignupPage() {
           .maybeSingle()
 
         if (profileCheck.error || !profileCheck.data) {
-          await Swal.fire({
-            icon: 'warning',
-            title: 'Account created, but profile not visible',
-            text:
-              profileCheck.error?.message ??
-              'This is usually caused by missing Row Level Security policies on profiles.',
-            confirmButtonColor: '#15803d',
-          })
+          toast.warning(
+            profileCheck.error?.message ?? 'This is usually caused by missing Row Level Security policies on profiles.',
+            'Account created, but profile not visible'
+          )
         }
       }
     }
 
     if (!data.session) {
-      await Swal.fire({
-        icon: 'success',
-        title: 'Check your email',
-        text: 'Confirm your email, then come back to log in. Your profile will be created after you sign in (or automatically if you enable the provided profiles trigger).',
-        confirmButtonColor: '#15803d',
-      })
+      toast.success(
+        'Confirm your email, then come back to log in. Your profile will be created after you sign in.',
+        'Check your email'
+      )
     } else {
-      await Swal.fire({
-        icon: 'success',
-        title: 'Account created',
-        text: 'Redirecting you to login.',
-        timer: 1200,
-        showConfirmButton: false,
-      })
+      toast.success('Redirecting you to login.', 'Account created')
     }
 
     router.push('/login')

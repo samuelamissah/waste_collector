@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import Swal from 'sweetalert2'
 import Image from 'next/image'
+import { useToast } from '../components/toast'
 
 export default function AvatarUploader({
   userId,
@@ -13,27 +13,18 @@ export default function AvatarUploader({
   currentAvatarUrl: string | null
 }) {
   const supabase = useMemo(() => createClient(), [])
+  const toast = useToast()
   const [uploading, setUploading] = useState(false)
   const [avatarUrl, setAvatarUrl] = useState(currentAvatarUrl)
 
   async function uploadAvatar(file: File) {
     if (!file.type.startsWith('image/')) {
-      await Swal.fire({
-        icon: 'warning',
-        title: 'Invalid file type',
-        text: 'Please upload an image file.',
-        confirmButtonColor: '#15803d',
-      })
+      toast.warning('Please upload an image file.', 'Invalid file type')
       return
     }
 
     if (file.size > 2 * 1024 * 1024) {
-      await Swal.fire({
-        icon: 'warning',
-        title: 'File too large',
-        text: 'Please upload an image under 2MB.',
-        confirmButtonColor: '#15803d',
-      })
+      toast.warning('Please upload an image under 2MB.', 'File too large')
       return
     }
 
@@ -49,12 +40,7 @@ export default function AvatarUploader({
     })
 
     if (upload.error) {
-      await Swal.fire({
-        icon: 'error',
-        title: 'Upload failed',
-        text: upload.error.message,
-        confirmButtonColor: '#15803d',
-      })
+      toast.error(upload.error.message, 'Upload failed')
       setUploading(false)
       return
     }
@@ -70,22 +56,13 @@ export default function AvatarUploader({
           ? 'Your profiles table is blocking updates. Apply the provided profiles RLS policies.'
           : 'Check your database permissions and schema.'
 
-      await Swal.fire({
-        icon: 'error',
-        title: 'Profile update failed',
-        text: `${update.error.message}\n\n${extra}`,
-        confirmButtonColor: '#15803d',
-      })
+      toast.error(`${update.error.message}\n\n${extra}`, 'Profile update failed')
       setUploading(false)
       return
     }
 
     setAvatarUrl(publicUrl)
-    await Swal.fire({
-      icon: 'success',
-      title: 'Profile picture updated',
-      confirmButtonColor: '#15803d',
-    })
+    toast.success('Profile picture updated.')
     setUploading(false)
   }
 

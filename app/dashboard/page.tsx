@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import PickupForm from '@/app/components/pickup-form'
+import AdminUserManager from '@/app/components/admin-user-manager'
+import AdminReportsManager from '@/app/components/admin-reports-manager'
 import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import QRCode from 'qrcode'
@@ -31,6 +33,7 @@ type Report = {
   type?: string | null
   description?: string | null
   message?: string | null
+  status?: string | null
   created_at?: string | null
 }
 
@@ -113,6 +116,8 @@ export default async function DashboardPage({
 
   const profile = (profileRow ?? null) as Profile | null
   const role = profile?.role ?? 'user'
+  const devAdminBootstrapEnabled =
+    process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_ADMIN_BOOTSTRAP === '1'
 
   const metadata = user.user_metadata as Record<string, unknown>
   const metadataName =
@@ -130,6 +135,27 @@ export default async function DashboardPage({
     const supabase = await createClient()
     await supabase.auth.signOut()
     redirect('/login')
+  }
+
+  async function devMakeMeAdmin() {
+    'use server'
+    if (process.env.NODE_ENV === 'production' || process.env.ENABLE_DEV_ADMIN_BOOTSTRAP !== '1') {
+      redirect('/dashboard')
+    }
+
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) redirect('/login?next=/dashboard')
+
+    const update = await supabase.from('profiles').update({ role: 'admin' }).eq('id', user.id)
+    if (update.error) {
+      redirect(`/dashboard?toast=${encodeURIComponent(update.error.message.slice(0, 160))}&toast_type=error`)
+    }
+
+    revalidatePath('/dashboard')
+    redirect('/dashboard?toast=You%20are%20now%20admin.&toast_type=success')
   }
 
   async function verifyPickup(formData: FormData) {
@@ -212,6 +238,7 @@ export default async function DashboardPage({
     }
 
     revalidatePath('/dashboard')
+    redirect('/dashboard?toast=Pickup%20verified.&toast_type=success')
   }
 
   async function completePickup(formData: FormData) {
@@ -341,6 +368,7 @@ export default async function DashboardPage({
     }
 
     revalidatePath('/dashboard')
+    redirect('/dashboard?toast=Pickup%20completed.&toast_type=success')
   }
 
   async function assignCollector(formData: FormData) {
@@ -386,7 +414,11 @@ export default async function DashboardPage({
   async function createBin(formData: FormData) {
     'use server'
     const code = String(formData.get('code') ?? '').trim()
+    const address = String(formData.get('address') ?? '').trim()
     if (!code) return
+    if (!address) {
+      redirect('/dashboard?bins_error=missing_address')
+    }
 
     const supabase = await createClient()
     const {
@@ -400,18 +432,27 @@ export default async function DashboardPage({
       .eq('id', user.id)
       .maybeSingle()
 
-    if (profileRow?.role !== 'admin') return
+    if (profileRow?.role !== 'admin') {
+      redirect('/dashboard?bins_error=not_admin')
+    }
 
-    const insert = await supabase.from('bins').insert({ code })
+    const primaryInsert = await supabase.from('bins').insert({ code, address } as unknown as Record<string, unknown>)
+    const insert =
+      primaryInsert.error &&
+      primaryInsert.error.message.toLowerCase().includes('column') &&
+      primaryInsert.error.message.toLowerCase().includes('address')
+        ? await supabase.from('bins').insert({ code } as unknown as Record<string, unknown>)
+        : primaryInsert
+
     if (insert.error) {
       const msg = insert.error.message.toLowerCase()
       if (msg.includes('duplicate') || msg.includes('unique')) {
         redirect('/dashboard?bins_error=duplicate')
       }
-      if (msg.includes('row-level security') || msg.includes('rls')) {
+      if (msg.includes('row-level security') || msg.includes('rls') || msg.includes('security policy') || msg.includes('permission denied')) {
         redirect('/dashboard?bins_error=rls')
       }
-      redirect('/dashboard?bins_error=unknown')
+      redirect(`/dashboard?bins_error=unknown&bins_error_detail=${encodeURIComponent(insert.error.message.slice(0, 160))}`)
     }
 
     revalidatePath('/dashboard')
@@ -435,15 +476,17 @@ export default async function DashboardPage({
       .eq('id', user.id)
       .maybeSingle()
 
-    if (profileRow?.role !== 'admin') return
+    if (profileRow?.role !== 'admin') {
+      redirect('/dashboard?bins_error=not_admin')
+    }
 
     const del = await supabase.from('bins').delete().eq('id', binId)
     if (del.error) {
       const msg = del.error.message.toLowerCase()
-      if (msg.includes('row-level security') || msg.includes('rls')) {
+      if (msg.includes('row-level security') || msg.includes('rls') || msg.includes('security policy') || msg.includes('permission denied')) {
         redirect('/dashboard?bins_error=rls')
       }
-      redirect('/dashboard?bins_error=unknown')
+      redirect(`/dashboard?bins_error=unknown&bins_error_detail=${encodeURIComponent(del.error.message.slice(0, 160))}`)
     }
 
     revalidatePath('/dashboard')
@@ -461,6 +504,16 @@ export default async function DashboardPage({
       .limit(50)
 
     const requests = (assignedRequests ?? []) as PickupRequest[]
+    const rawAssignedBinId = String(profile?.bin_id ?? '').trim()
+    let assignedBinLabel = rawAssignedBinId ? rawAssignedBinId : 'Not set'
+    if (rawAssignedBinId && isUuid(rawAssignedBinId)) {
+      const assignedBinLookup = await supabase.from('bins').select('code').eq('id', rawAssignedBinId).maybeSingle()
+      const code =
+        !assignedBinLookup.error && typeof (assignedBinLookup.data as { code?: string | null } | null)?.code === 'string'
+          ? String((assignedBinLookup.data as { code?: string | null }).code).trim()
+          : ''
+      assignedBinLabel = code ? code : `Unregistered bin (${rawAssignedBinId.slice(0, 8)})`
+    }
     const collectorBinIds = [...new Set(requests.map((r) => r.bin_id).filter((v): v is string => !!v))]
     const { data: collectorBins, error: collectorBinsError } =
       collectorBinIds.length > 0
@@ -469,7 +522,7 @@ export default async function DashboardPage({
 
     const collectorBinCodeById = new Map<string, string>(
       !collectorBinsError
-        ? (collectorBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : b.id])
+        ? (collectorBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : ''])
         : []
     )
 
@@ -526,6 +579,12 @@ export default async function DashboardPage({
             <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
               Verify the bin code before verifying or completing a pickup.
             </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+              <div className="text-zinc-600 dark:text-zinc-300">Assigned bin</div>
+              <div className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                {assignedBinLabel}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
@@ -568,7 +627,7 @@ export default async function DashboardPage({
                   {requests.length === 0 ? (
                     <tr>
                       <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={5}>
-                        No assigned pickups yet.
+                        No assigned pickups yet. If there are pending requests, an admin must assign them to you.
                       </td>
                     </tr>
                   ) : (
@@ -576,11 +635,17 @@ export default async function DashboardPage({
                       <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
                         <td className="py-4 pr-4">
                           <div className="font-medium">
-                            {r.address?.trim() || (r.bin_id ? collectorBinCodeById.get(r.bin_id) ?? r.bin_id : '') || r.id.slice(0, 8)}
+                            {r.address?.trim() ||
+                              (r.bin_id
+                                ? collectorBinCodeById.get(r.bin_id)?.trim()
+                                  ? collectorBinCodeById.get(r.bin_id)
+                                  : 'Unregistered bin'
+                                : '') ||
+                              r.id.slice(0, 8)}
                           </div>
                           {r.bin_id && (
                             <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                              {collectorBinCodeById.get(r.bin_id) ?? r.bin_id}
+                              {collectorBinCodeById.get(r.bin_id)?.trim() ? collectorBinCodeById.get(r.bin_id) : 'Unregistered bin'}
                             </div>
                           )}
                           {r.notes?.trim() && (
@@ -660,6 +725,8 @@ export default async function DashboardPage({
     const binsDeleted = typeof binsDeletedParam === 'string' ? binsDeletedParam === '1' : false
     const binsErrorParam = sp.bins_error
     const binsError = typeof binsErrorParam === 'string' ? binsErrorParam : ''
+    const binsErrorDetailParam = sp.bins_error_detail
+    const binsErrorDetail = typeof binsErrorDetailParam === 'string' ? binsErrorDetailParam : ''
 
     const requestsQuery = supabase
       .from('pickup_requests')
@@ -677,11 +744,33 @@ export default async function DashboardPage({
       .order('full_name', { ascending: true })
       .limit(200)
 
-    const { data: reportsData, error: reportsError } = await supabase
+    const reportsWithStatus = await supabase
       .from('reports')
-      .select('id, user_id, message, created_at')
+      .select('id, user_id, type, description, message, created_at, status')
       .order('created_at', { ascending: false })
-      .limit(10)
+      .limit(50)
+
+    const reportsErrorMessage = reportsWithStatus.error?.message.toLowerCase() ?? ''
+    const reportsFallback =
+      reportsWithStatus.error &&
+      reportsErrorMessage.includes('column') &&
+      (reportsErrorMessage.includes('status') || reportsErrorMessage.includes('type') || reportsErrorMessage.includes('description'))
+        ? reportsErrorMessage.includes('status')
+          ? await supabase
+              .from('reports')
+              .select('id, user_id, message, created_at')
+              .order('created_at', { ascending: false })
+              .limit(50)
+          : await supabase
+              .from('reports')
+              .select('id, user_id, message, created_at, status')
+              .order('created_at', { ascending: false })
+              .limit(50)
+        : null
+
+    const reportsStatusMissing = reportsErrorMessage.includes('column') && reportsErrorMessage.includes('status')
+    const reportsData = (reportsFallback?.data ?? reportsWithStatus.data) as unknown
+    const reportsError = reportsFallback?.error ?? reportsWithStatus.error
 
     const requests = (allRequests ?? []) as PickupRequest[]
     const collectorRows =
@@ -699,7 +788,7 @@ export default async function DashboardPage({
         : await Promise.resolve({ data: [] as Array<{ id: string; code: string | null }>, error: null as unknown })
 
     const adminBinCodeById = new Map<string, string>(
-      !adminBinsError ? (adminBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : b.id]) : []
+      !adminBinsError ? (adminBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : '']) : []
     )
     const reporterIds = [...new Set(reports.map((r) => r.user_id))]
     const { data: reporterProfiles } =
@@ -710,23 +799,71 @@ export default async function DashboardPage({
     const reporterNameById = new Map(
       (reporterProfiles ?? []).map((p) => [p.id, p.full_name?.trim() ? p.full_name : 'User'])
     )
+    const reporterNameRecord = Object.fromEntries(reporterNameById.entries())
 
-    const [{ count: totalCount }, { count: pendingCount }, { count: assignedCount }, { count: verifiedCount }, { count: completedCount }] =
-      await Promise.all([
-        supabase.from('pickup_requests').select('id', { count: 'exact', head: true }),
-        supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-        supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'assigned'),
-        supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'verified'),
-        supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'completed'),
-      ])
+    const [
+      { count: totalCount },
+      { count: pendingCount },
+      { count: assignedCount },
+      { count: verifiedCount },
+      { count: completedCount },
+      { count: totalUsersCount },
+      { count: totalReportsCount },
+    ] = await Promise.all([
+      supabase.from('pickup_requests').select('id', { count: 'exact', head: true }),
+      supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'assigned'),
+      supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'verified'),
+      supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'completed'),
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase.from('reports').select('id', { count: 'exact', head: true }),
+    ])
+
+    const unresolvedReports = await supabase
+      .from('reports')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['open', 'under_review'])
+
+    const unresolvedReportsCount =
+      unresolvedReports.error &&
+      unresolvedReports.error.message.toLowerCase().includes('column') &&
+      unresolvedReports.error.message.toLowerCase().includes('status')
+        ? null
+        : unresolvedReports.count ?? 0
 
     const { data: binsData, error: binsReadError } = await supabase
       .from('bins')
-      .select('id, code')
+      .select('id, code, address')
       .order('code', { ascending: true })
       .limit(200)
 
-    const bins = (!binsReadError ? (binsData ?? []) : []) as Array<{ id: string; code: string | null }>
+    const bins = (!binsReadError ? (binsData ?? []) : []) as Array<{ id: string; code: string | null; address?: string | null }>
+
+    const { data: userProfilesData, error: userProfilesError } = await supabase
+      .from('profiles')
+      .select('id, full_name, role, bin_id')
+      .order('full_name', { ascending: true })
+      .limit(200)
+
+    const userProfiles = (!userProfilesError ? (userProfilesData ?? []) : []) as Array<{
+      id: string
+      full_name: string | null
+      role: string | null
+      bin_id: string | null
+    }>
+
+    const { data: openRequestsData } = await supabase
+      .from('pickup_requests')
+      .select('bin_id, status')
+      .in('status', ['pending', 'assigned', 'verified'])
+      .limit(2000)
+
+    const openCountByBinId = new Map<string, number>()
+    ;(openRequestsData ?? []).forEach((row) => {
+      const binId = String((row as { bin_id?: string | null } | null)?.bin_id ?? '').trim()
+      if (!binId) return
+      openCountByBinId.set(binId, (openCountByBinId.get(binId) ?? 0) + 1)
+    })
 
     return (
       <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
@@ -783,7 +920,7 @@ export default async function DashboardPage({
             </p>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-5">
+          <div className="grid gap-4 md:grid-cols-7">
             <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
               <div className="text-sm text-zinc-600 dark:text-zinc-300">Total requests</div>
               <div className="mt-1 text-2xl font-bold">{totalCount ?? 0}</div>
@@ -804,6 +941,17 @@ export default async function DashboardPage({
               <div className="text-sm text-zinc-600 dark:text-zinc-300">Completed</div>
               <div className="mt-1 text-2xl font-bold">{completedCount ?? 0}</div>
             </div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Users</div>
+              <div className="mt-1 text-2xl font-bold">{totalUsersCount ?? 0}</div>
+            </div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Reports</div>
+              <div className="mt-1 text-2xl font-bold">{totalReportsCount ?? 0}</div>
+              {unresolvedReportsCount !== null && (
+                <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{unresolvedReportsCount} unresolved</div>
+              )}
+            </div>
           </div>
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
@@ -817,6 +965,11 @@ export default async function DashboardPage({
                   className="w-full rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black md:w-56"
                   name="code"
                   placeholder="BIN-0001"
+                />
+                <input
+                  className="w-full rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black md:w-64"
+                  name="address"
+                  placeholder="Bin address / location"
                 />
                 <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
                   Add bin
@@ -840,14 +993,25 @@ export default async function DashboardPage({
                     That bin code already exists.
                   </div>
                 )}
+                {binsError === 'not_admin' && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    Your account is not an admin. Promote your user (see supabase_promote_admin.sql), then try again.
+                  </div>
+                )}
+                {binsError === 'missing_address' && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    Address is required for this bins table schema.
+                  </div>
+                )}
                 {binsError === 'rls' && (
                   <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Bin write blocked by RLS. Run supabase_bins_admin.sql, then try again.
+                    Bin write blocked by RLS. Run supabase_admin_full_access.sql (or supabase_bins_admin.sql), then try
+                    again. If it still fails, make sure your profile role is admin (see supabase_promote_admin.sql).
                   </div>
                 )}
                 {binsError === 'unknown' && (
                   <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Bin update failed.
+                    Bin update failed{binsErrorDetail ? `: ${binsErrorDetail}` : '.'}
                   </div>
                 )}
               </div>
@@ -862,14 +1026,15 @@ export default async function DashboardPage({
                   <thead>
                     <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
                       <th className="py-3 pr-4 font-medium">Code</th>
-                      <th className="py-3 pr-4 font-medium">ID</th>
+                      <th className="py-3 pr-4 font-medium">Address</th>
+                      <th className="py-3 pr-4 font-medium">Status</th>
                       <th className="py-3 pr-4 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {bins.length === 0 ? (
                       <tr>
-                        <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={3}>
+                        <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={4}>
                           No bins yet.
                         </td>
                       </tr>
@@ -877,7 +1042,10 @@ export default async function DashboardPage({
                       bins.map((b) => (
                         <tr key={b.id} className="border-b border-black/[.08] dark:border-white/[.145]">
                           <td className="py-4 pr-4">{b.code?.trim() ? b.code : '—'}</td>
-                          <td className="py-4 pr-4 text-xs text-zinc-600 dark:text-zinc-300">{b.id}</td>
+                          <td className="py-4 pr-4">{b.address?.trim() ? b.address : '—'}</td>
+                          <td className="py-4 pr-4">
+                            {(openCountByBinId.get(b.id) ?? 0) > 0 ? `In process (${openCountByBinId.get(b.id)})` : 'Available'}
+                          </td>
                           <td className="py-4 pr-4">
                             <form action={deleteBin}>
                               <input type="hidden" name="binId" value={b.id} />
@@ -897,6 +1065,12 @@ export default async function DashboardPage({
               </div>
             )}
           </div>
+
+          <AdminUserManager
+            currentUserId={user.id}
+            initialUsers={userProfiles}
+            initialBins={bins as unknown as Array<{ id: string; code: string | null; address?: string | null }>}
+          />
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -946,7 +1120,13 @@ export default async function DashboardPage({
                       <tr key={r.id} className="border-b border-black/[.08] align-top dark:border-white/[.145]">
                         <td className="py-4 pr-4">{r.id.slice(0, 8)}</td>
                         <td className="py-4 pr-4">
-                          {r.address?.trim() || (r.bin_id ? adminBinCodeById.get(r.bin_id) ?? r.bin_id : '') || ''}
+                          {r.address?.trim() ||
+                            (r.bin_id
+                              ? adminBinCodeById.get(r.bin_id)?.trim()
+                                ? adminBinCodeById.get(r.bin_id)
+                                : 'Unregistered bin'
+                              : '') ||
+                            ''}
                         </td>
                         <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
                         <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
@@ -989,32 +1169,19 @@ export default async function DashboardPage({
             </div>
           </div>
 
-          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Reports from residents</h2>
-              <Link
-                className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
-                href="/reports"
-              >
-                View all
-              </Link>
-            </div>
-            <div className="mt-4 space-y-3">
-              {reports.length === 0 ? (
-                <div className="text-sm text-zinc-600 dark:text-zinc-300">No reports.</div>
-              ) : (
-                reports.map((r) => (
-                  <div key={r.id} className="rounded-2xl border border-black/[.08] p-4 dark:border-white/[.145]">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="text-sm font-medium">{reporterNameById.get(r.user_id) ?? 'User'}</div>
-                      <div className="text-xs text-zinc-600 dark:text-zinc-300">{formatDate(r.created_at)}</div>
-                    </div>
-                    <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">{r.message ?? ''}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          <AdminReportsManager
+            initialReports={
+              reports as unknown as Array<{
+                id: string
+                user_id: string
+                message: string | null
+                status?: string | null
+                created_at?: string | null
+              }>
+            }
+            initialReporterNames={reporterNameRecord}
+            initialStatusColumnMissing={reportsStatusMissing}
+          />
         </main>
       </div>
     )
@@ -1106,27 +1273,39 @@ export default async function DashboardPage({
             supabase_auth_profiles.sql. Then refresh.
           </div>
         )}
+        {devAdminBootstrapEnabled && role !== 'admin' && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>Dev admin bootstrap is enabled for this environment.</div>
+              <form action={devMakeMeAdmin}>
+                <button className="rounded-lg bg-amber-600 px-4 py-2 text-sm text-white" type="submit">
+                  Make me admin
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
         <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
           <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
             Track your pickups, request service, and earn eco-points.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
-            <a className="rounded-lg bg-green-700 px-4 py-3 text-sm text-white" href="#request-pickup">
+            <Link className="rounded-lg bg-green-700 px-4 py-3 text-sm text-white" href="/dashboard?section=request-pickup">
               Request pickup
-            </a>
+            </Link>
             <Link
               className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
               href="/requests"
             >
               View history
             </Link>
-            <a
+            <Link
               className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-              href="#bin-info"
+              href="/dashboard?section=bin-info"
             >
               Bin info
-            </a>
+            </Link>
             <Link
               className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
               href="/reports"
@@ -1158,12 +1337,12 @@ export default async function DashboardPage({
                 >
                   View all
                 </Link>
-                <a
+                <Link
                   className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
-                  href="#request-pickup"
+                  href="/dashboard?section=request-pickup"
                 >
                   New request
-                </a>
+                </Link>
               </div>
             </div>
             <div className="mt-4 overflow-x-auto">
@@ -1205,6 +1384,12 @@ export default async function DashboardPage({
             <h2 className="text-lg font-semibold">Your bin code</h2>
             <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">Bin code</div>
             <div className="mt-1 text-xl font-semibold">{binCode || 'Not set'}</div>
+            <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">Bin status</div>
+            <div className="mt-1 text-sm">
+              {requests.some((r) => (r.status ?? '').trim() && r.status !== 'completed')
+                ? `In process (${titleForStatus(requests.find((r) => (r.status ?? '').trim() && r.status !== 'completed')?.status ?? 'pending')})`
+                : 'Available'}
+            </div>
             <div className="mt-4">
               {binQrSvg ? (
                 <div
@@ -1213,7 +1398,7 @@ export default async function DashboardPage({
                 />
               ) : (
                 <div className="text-sm text-zinc-600 dark:text-zinc-300">
-                  Ask your admin to assign a bin code to your profile.
+                  No bin is assigned to your profile. You can still request pickup by entering a bin code or an address.
                 </div>
               )}
             </div>
@@ -1224,7 +1409,7 @@ export default async function DashboardPage({
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Request pickup</h2>
-              <div className="text-sm text-zinc-600 dark:text-zinc-300">Bin code required</div>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Bin code or address required</div>
             </div>
             <div className="mt-4">
               <PickupForm userId={user.id} binId={(profile?.bin_id ?? undefined) || undefined} />

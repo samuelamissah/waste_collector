@@ -12,6 +12,10 @@ type ProfileRow = {
   bin_id: string | null
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 export default async function ProfilePage({
   searchParams,
 }: {
@@ -84,6 +88,17 @@ export default async function ProfilePage({
         : null) ?? null
 
   const displayName = profile.full_name?.trim() ? profile.full_name : metadataName ?? 'User'
+
+  const rawBinId = String(profile.bin_id ?? '').trim()
+  let binLabel = rawBinId ? rawBinId : 'Not set'
+  if (rawBinId && isUuid(rawBinId)) {
+    const binLookup = await supabase.from('bins').select('code').eq('id', rawBinId).maybeSingle()
+    const code =
+      !binLookup.error && typeof (binLookup.data as { code?: string | null } | null)?.code === 'string'
+        ? String((binLookup.data as { code?: string | null }).code).trim()
+        : ''
+    binLabel = code ? code : `Unregistered bin (${rawBinId.slice(0, 8)})`
+  }
 
   const sp = (await Promise.resolve(searchParams)) ?? {}
   const updatedParam = sp.updated
@@ -232,7 +247,7 @@ export default async function ProfilePage({
               </div>
               <div className="flex items-center justify-between gap-4">
                 <div className="text-zinc-600 dark:text-zinc-300">Bin code</div>
-                <div className="font-medium">{profile.bin_id ?? 'Not set'}</div>
+                <div className="font-medium">{binLabel}</div>
               </div>
             </div>
           </div>

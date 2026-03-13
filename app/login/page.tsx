@@ -4,11 +4,12 @@ import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import Swal from 'sweetalert2'
+import { useToast } from '../components/toast'
 
 export default function LoginPage() {
   const supabase = createClient()
   const router = useRouter()
+  const toast = useToast()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -24,12 +25,7 @@ export default function LoginPage() {
     })
 
     if (error) {
-      await Swal.fire({
-        icon: 'error',
-        title: 'Login failed',
-        text: error.message,
-        confirmButtonColor: '#15803d',
-      })
+      toast.error(error.message, 'Login failed')
       setLoading(false)
       return
     }

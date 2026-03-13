@@ -100,7 +100,7 @@ export default async function RequestsPage({
       : await Promise.resolve({ data: [] as Array<{ id: string; code: string | null }>, error: null as unknown })
 
   const binCodeById = new Map<string, string>(
-    !binsError ? (bins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : b.id]) : []
+    !binsError ? (bins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : '']) : []
   )
 
   return (
@@ -161,12 +161,12 @@ export default async function RequestsPage({
             </div>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
-            <Link className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" href="/dashboard#request-pickup">
+            <Link className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" href="/dashboard?section=request-pickup">
               Request pickup
             </Link>
             <Link
               className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-              href="/dashboard#bin-info"
+              href="/dashboard?section=bin-info"
             >
               Bin info
             </Link>
@@ -210,7 +210,7 @@ export default async function RequestsPage({
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
-                  <th className="py-3 pr-4 font-medium">Request</th>
+                  <th className="py-3 pr-4 font-medium">Ref</th>
                   <th className="py-3 pr-4 font-medium">Bin</th>
                   <th className="py-3 pr-4 font-medium">Waste type</th>
                   <th className="py-3 pr-4 font-medium">Status</th>
@@ -229,7 +229,11 @@ export default async function RequestsPage({
                     <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
                       <td className="py-4 pr-4">{r.id.slice(0, 8)}</td>
                       <td className="py-4 pr-4">
-                        {r.bin_id ? (binCodeById.get(r.bin_id) ?? r.bin_id) : '—'}
+                        {r.bin_id
+                          ? binCodeById.get(r.bin_id)?.trim()
+                            ? binCodeById.get(r.bin_id)
+                            : 'Unregistered bin'
+                          : '—'}
                       </td>
                       <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
                       <td className="py-4 pr-4">{titleForStatus(r.status)}</td>

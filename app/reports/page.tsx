@@ -6,7 +6,10 @@ import Link from 'next/link'
 type ReportRow = {
   id: string
   user_id: string
+  type?: string | null
+  description?: string | null
   message: string | null
+  status?: string | null
   created_at?: string | null
 }
 
@@ -105,8 +108,19 @@ export default async function ReportsPage({
     } = await supabase.auth.getUser()
     if (!user) return
 
-    const message = `[${reportType}] ${description}`
-    const insert = await supabase.from('reports').insert({ user_id: user.id, message })
+    const structuredInsert = await supabase
+      .from('reports')
+      .insert({ user_id: user.id, type: reportType, description, status: 'open' } as unknown as Record<string, unknown>)
+
+    const insert =
+      structuredInsert.error &&
+      structuredInsert.error.message.toLowerCase().includes('column') &&
+      (structuredInsert.error.message.toLowerCase().includes('type') ||
+        structuredInsert.error.message.toLowerCase().includes('description') ||
+        structuredInsert.error.message.toLowerCase().includes('status'))
+        ? await supabase.from('reports').insert({ user_id: user.id, message: `[${reportType}] ${description}` })
+        : structuredInsert
+
     if (insert.error) return
 
     revalidatePath('/reports')
@@ -114,14 +128,40 @@ export default async function ReportsPage({
     redirect('/reports?submitted=1')
   }
 
-  const baseQuery = supabase
+  const baseQueryWithStatus = supabase
     .from('reports')
-    .select('id, user_id, message, created_at')
+    .select('id, user_id, type, description, message, created_at, status')
     .order('created_at', { ascending: false })
     .limit(50)
 
-  const { data: reportsData } =
-    role === 'admin' ? await baseQuery : await baseQuery.eq('user_id', user.id)
+  const reportsWithStatus = role === 'admin' ? await baseQueryWithStatus : await baseQueryWithStatus.eq('user_id', user.id)
+
+  const reportsErrorMessage = reportsWithStatus.error?.message.toLowerCase() ?? ''
+  const reportsFallback =
+    reportsWithStatus.error &&
+    reportsErrorMessage.includes('column') &&
+    (reportsErrorMessage.includes('status') || reportsErrorMessage.includes('type') || reportsErrorMessage.includes('description'))
+      ? reportsErrorMessage.includes('status')
+        ? role === 'admin'
+          ? await supabase.from('reports').select('id, user_id, message, created_at').order('created_at', { ascending: false }).limit(50)
+          : await supabase
+              .from('reports')
+              .select('id, user_id, message, created_at')
+              .eq('user_id', user.id)
+              .order('created_at', { ascending: false })
+              .limit(50)
+        : role === 'admin'
+          ? await supabase.from('reports').select('id, user_id, message, created_at, status').order('created_at', { ascending: false }).limit(50)
+          : await supabase
+              .from('reports')
+              .select('id, user_id, message, created_at, status')
+              .eq('user_id', user.id)
+              .order('created_at', { ascending: false })
+              .limit(50)
+      : null
+
+  const reportsStatusMissing = reportsErrorMessage.includes('column') && reportsErrorMessage.includes('status')
+  const reportsData = (reportsFallback?.data ?? reportsWithStatus.data) as unknown
 
   const reports = (reportsData ?? []) as ReportRow[]
   const reporterIds = role === 'admin' ? [...new Set(reports.map((r) => r.user_id))] : []
@@ -194,6 +234,11 @@ export default async function ReportsPage({
           <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
             Report illegal dumping, missed pickup, or overflowing public bins.
           </p>
+          {role === 'admin' && reportsStatusMissing && (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Reports status is not enabled in your database. Apply supabase_reports_schema.sql to track open/under review/resolved.
+            </div>
+          )}
           {submitted && (
             <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
               Report submitted.
@@ -268,7 +313,14 @@ export default async function ReportsPage({
                       </div>
                       <div className="text-xs text-zinc-600 dark:text-zinc-300">{formatDate(r.created_at ?? null)}</div>
                     </div>
-                    <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">{r.message ?? ''}</div>
+                    <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">
+                      {(r.type?.trim() ? `[${r.type}] ` : '') + (r.description?.trim() ? r.description : r.message ?? '')}
+                    </div>
+                    {role === 'admin' && (
+                      <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
+                        Status: {String(r.status ?? 'open').replaceAll('_', ' ')}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
