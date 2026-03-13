@@ -11,7 +11,7 @@ type AdminReportRow = {
   user_id: string
   type?: string | null
   description?: string | null
-  message: string | null
+  message?: string | null
   status?: string | null
   created_at?: string | null
 }
@@ -32,6 +32,23 @@ function formatDate(value: string | null | undefined) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return date.toLocaleString()
+}
+
+function labelForReportType(value: string | null | undefined) {
+  const v = String(value ?? '').trim()
+  if (!v) return ''
+  if (v === 'illegal_dumping') return 'Illegal dumping'
+  if (v === 'missed_pickup') return 'Missed pickup'
+  if (v === 'overflowing_public_bin') return 'Overflowing public bin'
+  return v.replaceAll('_', ' ').replaceAll('-', ' ').replace(/\b\w/g, (m) => m.toUpperCase())
+}
+
+function parseLegacyMessage(value: string | null | undefined) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return { type: '', description: '' }
+  const match = raw.match(/^\[([^\]]+)\]\s*(.*)$/)
+  if (!match) return { type: '', description: raw }
+  return { type: match[1] ?? '', description: (match[2] ?? '').trim() || raw }
 }
 
 export default function AdminReportsManager({
@@ -98,6 +115,19 @@ export default function AdminReportsManager({
         const fallback = await supabase
           .from('reports')
           .select('id, user_id, message, status, created_at')
+          .order('created_at', { ascending: false })
+          .limit(200)
+        if (fallback.error) {
+          toast.error(fallback.error.message, 'Could not load reports')
+          setReloading(false)
+          return
+        }
+        const nextReports = (fallback.data ?? []) as AdminReportRow[]
+        setReports(nextReports)
+      } else if (message.includes('column') && message.includes('message')) {
+        const fallback = await supabase
+          .from('reports')
+          .select('id, user_id, type, description, status, created_at')
           .order('created_at', { ascending: false })
           .limit(200)
         if (fallback.error) {
@@ -251,7 +281,20 @@ export default function AdminReportsManager({
                     </td>
                     <td className="py-4 pr-4">
                       <div className="text-sm text-zinc-700 dark:text-zinc-200">
-                        {(r.type?.trim() ? `[${r.type}] ` : '') + (r.description?.trim() ? r.description : r.message ?? '')}
+                        <div className="flex flex-wrap items-start gap-2">
+                          {(labelForReportType(r.type) || labelForReportType(parseLegacyMessage(r.message).type)) && (
+                            <span className="rounded-full border border-black/[.08] bg-white px-2 py-0.5 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                              {labelForReportType(r.type) || labelForReportType(parseLegacyMessage(r.message).type)}
+                            </span>
+                          )}
+                          <span>
+                            {r.description?.trim()
+                              ? r.description
+                              : r.message?.trim()
+                                ? parseLegacyMessage(r.message).description || r.message
+                                : ''}
+                          </span>
+                        </div>
                       </div>
                       <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{r.id.slice(0, 8)}</div>
                     </td>

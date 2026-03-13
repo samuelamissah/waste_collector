@@ -9,6 +9,16 @@ begin
     from information_schema.columns
     where table_schema = 'public'
       and table_name = 'reports'
+      and column_name = 'message'
+  ) then
+    execute 'alter table public.reports add column message text';
+  end if;
+
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'reports'
       and column_name = 'type'
   ) then
     execute 'alter table public.reports add column type text';

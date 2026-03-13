@@ -8,7 +8,7 @@ type ReportRow = {
   user_id: string
   type?: string | null
   description?: string | null
-  message: string | null
+  message?: string | null
   status?: string | null
   created_at?: string | null
 }
@@ -18,6 +18,23 @@ function formatDate(value: string | null | undefined) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return date.toLocaleString()
+}
+
+function labelForReportType(value: string | null | undefined) {
+  const v = String(value ?? '').trim()
+  if (!v) return ''
+  if (v === 'illegal_dumping') return 'Illegal dumping'
+  if (v === 'missed_pickup') return 'Missed pickup'
+  if (v === 'overflowing_public_bin') return 'Overflowing public bin'
+  return v.replaceAll('_', ' ').replaceAll('-', ' ').replace(/\b\w/g, (m) => m.toUpperCase())
+}
+
+function parseLegacyMessage(value: string | null | undefined) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return { type: '', description: '' }
+  const match = raw.match(/^\[([^\]]+)\]\s*(.*)$/)
+  if (!match) return { type: '', description: raw }
+  return { type: match[1] ?? '', description: (match[2] ?? '').trim() || raw }
 }
 
 export default async function ReportsPage({
@@ -52,6 +69,8 @@ export default async function ReportsPage({
         : typeof metadata?.name === 'string' && metadata.name.trim()
           ? metadata.name.trim()
           : null) ?? null
+    const metadataRole = typeof metadata?.role === 'string' ? metadata.role.trim() : ''
+    const inferredRole = metadataRole === 'collector' ? 'collector' : 'user'
 
     await supabase
       .from('profiles')
@@ -59,7 +78,7 @@ export default async function ReportsPage({
         {
           id: user.id,
           full_name: fullNameFromMetadata,
-          role: 'user',
+          role: inferredRole,
         },
         { onConflict: 'id', ignoreDuplicates: true }
       )
@@ -88,6 +107,8 @@ export default async function ReportsPage({
   const sp = (await Promise.resolve(searchParams)) ?? {}
   const submittedParam = sp.submitted
   const submitted = typeof submittedParam === 'string' ? submittedParam === '1' : false
+  const errorParam = sp.error
+  const error = typeof errorParam === 'string' ? errorParam : ''
 
   async function signOut() {
     'use server'
@@ -100,13 +121,13 @@ export default async function ReportsPage({
     'use server'
     const reportType = String(formData.get('type') ?? '').trim()
     const description = String(formData.get('description') ?? '').trim()
-    if (!reportType || !description) return
+    if (!reportType || !description) redirect('/reports?error=missing_fields')
 
     const supabase = await createClient()
     const {
       data: { user },
     } = await supabase.auth.getUser()
-    if (!user) return
+    if (!user) redirect('/login?next=/reports')
 
     const structuredInsert = await supabase
       .from('reports')
@@ -121,7 +142,13 @@ export default async function ReportsPage({
         ? await supabase.from('reports').insert({ user_id: user.id, message: `[${reportType}] ${description}` })
         : structuredInsert
 
-    if (insert.error) return
+    if (insert.error) {
+      const msg = insert.error.message.toLowerCase()
+      if (msg.includes('row-level security') || msg.includes('rls') || msg.includes('security policy') || msg.includes('permission denied')) {
+        redirect('/reports?error=rls')
+      }
+      redirect('/reports?error=insert_failed')
+    }
 
     revalidatePath('/reports')
     revalidatePath('/dashboard')
@@ -140,7 +167,10 @@ export default async function ReportsPage({
   const reportsFallback =
     reportsWithStatus.error &&
     reportsErrorMessage.includes('column') &&
-    (reportsErrorMessage.includes('status') || reportsErrorMessage.includes('type') || reportsErrorMessage.includes('description'))
+    (reportsErrorMessage.includes('status') ||
+      reportsErrorMessage.includes('type') ||
+      reportsErrorMessage.includes('description') ||
+      reportsErrorMessage.includes('message'))
       ? reportsErrorMessage.includes('status')
         ? role === 'admin'
           ? await supabase.from('reports').select('id, user_id, message, created_at').order('created_at', { ascending: false }).limit(50)
@@ -150,17 +180,31 @@ export default async function ReportsPage({
               .eq('user_id', user.id)
               .order('created_at', { ascending: false })
               .limit(50)
-        : role === 'admin'
-          ? await supabase.from('reports').select('id, user_id, message, created_at, status').order('created_at', { ascending: false }).limit(50)
-          : await supabase
-              .from('reports')
-              .select('id, user_id, message, created_at, status')
-              .eq('user_id', user.id)
-              .order('created_at', { ascending: false })
-              .limit(50)
+        : reportsErrorMessage.includes('message')
+          ? role === 'admin'
+            ? await supabase
+                .from('reports')
+                .select('id, user_id, type, description, created_at, status')
+                .order('created_at', { ascending: false })
+                .limit(50)
+            : await supabase
+                .from('reports')
+                .select('id, user_id, type, description, created_at, status')
+                .eq('user_id', user.id)
+                .order('created_at', { ascending: false })
+                .limit(50)
+          : role === 'admin'
+            ? await supabase.from('reports').select('id, user_id, message, created_at, status').order('created_at', { ascending: false }).limit(50)
+            : await supabase
+                .from('reports')
+                .select('id, user_id, message, created_at, status')
+                .eq('user_id', user.id)
+                .order('created_at', { ascending: false })
+                .limit(50)
       : null
 
   const reportsStatusMissing = reportsErrorMessage.includes('column') && reportsErrorMessage.includes('status')
+  const reportsReadError = reportsFallback ? reportsFallback.error?.message ?? null : reportsWithStatus.error?.message ?? null
   const reportsData = (reportsFallback?.data ?? reportsWithStatus.data) as unknown
 
   const reports = (reportsData ?? []) as ReportRow[]
@@ -234,6 +278,30 @@ export default async function ReportsPage({
           <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
             Report illegal dumping, missed pickup, or overflowing public bins.
           </p>
+          {(error || reportsReadError) && (
+            <div className="mt-4 space-y-2">
+              {error === 'missing_fields' && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Please select a type and add a description.
+                </div>
+              )}
+              {error === 'rls' && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Report submission blocked by database permissions (RLS). Run supabase_admin_full_access.sql, then try again.
+                </div>
+              )}
+              {error === 'insert_failed' && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Report submission failed. Check your database permissions (RLS) and schema, then try again.
+                </div>
+              )}
+              {reportsReadError && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Could not load reports: {reportsReadError}
+                </div>
+              )}
+            </div>
+          )}
           {role === 'admin' && reportsStatusMissing && (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               Reports status is not enabled in your database. Apply supabase_reports_schema.sql to track open/under review/resolved.
@@ -314,7 +382,20 @@ export default async function ReportsPage({
                       <div className="text-xs text-zinc-600 dark:text-zinc-300">{formatDate(r.created_at ?? null)}</div>
                     </div>
                     <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">
-                      {(r.type?.trim() ? `[${r.type}] ` : '') + (r.description?.trim() ? r.description : r.message ?? '')}
+                      <div className="flex flex-wrap items-start gap-2">
+                        {(labelForReportType(r.type) || labelForReportType(parseLegacyMessage(r.message).type)) && (
+                          <span className="rounded-full border border-black/[.08] bg-white px-2 py-0.5 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                            {labelForReportType(r.type) || labelForReportType(parseLegacyMessage(r.message).type)}
+                          </span>
+                        )}
+                        <span>
+                          {r.description?.trim()
+                            ? r.description
+                            : r.message?.trim()
+                              ? parseLegacyMessage(r.message).description || r.message
+                              : ''}
+                        </span>
+                      </div>
                     </div>
                     {role === 'admin' && (
                       <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">

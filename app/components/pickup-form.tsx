@@ -132,7 +132,7 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
     router.push('/requests?submitted=1')
   }
 
-  async function useMyLocation() {
+  async function getMyLocation() {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       toast.error('Geolocation is not available in this browser.')
       return
@@ -205,7 +205,7 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
           <label className="text-sm font-medium">Location (optional)</label>
           <button
             type="button"
-            onClick={() => void useMyLocation()}
+            onClick={() => void getMyLocation()}
             disabled={gettingLocation || loading}
             className="rounded-lg border border-black/[.08] px-3 py-2 text-sm transition-colors hover:bg-black/[.04] disabled:opacity-60 dark:border-white/[.145] dark:hover:bg-white/[.08]"
           >

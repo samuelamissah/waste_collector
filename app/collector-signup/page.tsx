@@ -7,7 +7,7 @@ import Link from 'next/link'
 import Swal from 'sweetalert2'
 import { useToast } from '../components/toast'
 
-export default function SignupPage() {
+export default function CollectorSignupPage() {
   const supabase = createClient()
   const router = useRouter()
   const toast = useToast()
@@ -25,7 +25,7 @@ export default function SignupPage() {
       email,
       password,
       options: {
-        data: { full_name: fullName, role: 'user' },
+        data: { full_name: fullName, role: 'collector' },
       },
     })
 
@@ -87,7 +87,7 @@ export default function SignupPage() {
           {
             id: data.user.id,
             full_name: fullName,
-            role: 'user',
+            role: 'collector',
           },
           { onConflict: 'id' }
         )
@@ -101,11 +101,7 @@ export default function SignupPage() {
 
         toast.warning(`${message}\n\n${extra}`, 'Account created, but profile not saved')
       } else {
-        const profileCheck = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', data.user.id)
-          .maybeSingle()
+        const profileCheck = await supabase.from('profiles').select('id').eq('id', data.user.id).maybeSingle()
 
         if (profileCheck.error || !profileCheck.data) {
           toast.warning(
@@ -155,8 +151,10 @@ export default function SignupPage() {
         <div className="flex flex-1 items-center justify-center py-10">
           <div className="w-full max-w-md rounded-3xl border border-black/[.08] bg-white p-6 shadow-sm dark:border-white/[.145] dark:bg-black">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">Create resident account</h1>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Sign up to request pickups and track your activity.</p>
+              <h1 className="text-2xl font-bold tracking-tight">Create collector account</h1>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+                Sign up as a collector to receive assigned pickups.
+              </p>
             </div>
 
             <form onSubmit={handleSignup} className="mt-6 space-y-4">
@@ -211,16 +209,9 @@ export default function SignupPage() {
             </form>
 
             <div className="mt-6 text-center text-sm text-zinc-600 dark:text-zinc-300">
-              Already have an account?{' '}
-              <Link href="/login" className="font-medium text-zinc-900 dark:text-zinc-50">
-                Log in
-              </Link>
-            </div>
-
-            <div className="mt-3 text-center text-sm text-zinc-600 dark:text-zinc-300">
-              Want to collect pickups?{' '}
-              <Link href="/collector-signup" className="font-medium text-zinc-900 dark:text-zinc-50">
-                Sign up as collector
+              Need a resident account?{' '}
+              <Link href="/signup" className="font-medium text-zinc-900 dark:text-zinc-50">
+                Sign up as resident
               </Link>
             </div>
           </div>
@@ -229,3 +220,4 @@ export default function SignupPage() {
     </div>
   )
 }
+

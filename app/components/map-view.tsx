@@ -3,9 +3,10 @@
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
+import markerIconPng from 'leaflet/dist/images/marker-icon.png'
 import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
+import { useMemo } from 'react'
 
 type MarkerData = {
   id: string
@@ -17,17 +18,18 @@ type MarkerData = {
 export default function MapView({ markers }: { markers: MarkerData[] }) {
   const center: [number, number] = [5.6037, -0.187]
 
-  if (typeof window !== 'undefined') {
-    const anyL = L as unknown as { Icon: { Default: { prototype: { _getIconUrl?: unknown } } } }
-    if (anyL.Icon?.Default?.prototype) {
-      delete anyL.Icon.Default.prototype._getIconUrl
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: markerIcon2x.src,
-        iconUrl: markerIcon.src,
-        shadowUrl: markerShadow.src,
-      })
-    }
-  }
+  const icon = useMemo(() => {
+    if (typeof window === 'undefined') return null
+    return L.icon({
+      iconRetinaUrl: markerIcon2x.src,
+      iconUrl: markerIconPng.src,
+      shadowUrl: markerShadow.src,
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+      popupAnchor: [1, -34],
+      shadowSize: [41, 41],
+    })
+  }, [])
 
   return (
     <MapContainer
@@ -42,7 +44,7 @@ export default function MapView({ markers }: { markers: MarkerData[] }) {
       />
 
       {markers.map((marker) => (
-        <Marker key={marker.id} position={[marker.lat, marker.lng]}>
+        <Marker key={marker.id} position={[marker.lat, marker.lng]} icon={icon ?? undefined}>
           <Popup>{marker.label}</Popup>
         </Marker>
       ))}

@@ -46,6 +46,8 @@ export default async function ProfilePage({
         : typeof metadata?.name === 'string' && metadata.name.trim()
           ? metadata.name.trim()
           : null) ?? null
+    const metadataRole = typeof metadata?.role === 'string' ? metadata.role.trim() : ''
+    const inferredRole = metadataRole === 'collector' ? 'collector' : 'user'
 
     await supabase
       .from('profiles')
@@ -53,7 +55,7 @@ export default async function ProfilePage({
         {
           id: user.id,
           full_name: fullNameFromMetadata,
-          role: 'user',
+          role: inferredRole,
         },
         { onConflict: 'id', ignoreDuplicates: true }
       )

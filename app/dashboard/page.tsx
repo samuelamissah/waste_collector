@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import PickupForm from '@/app/components/pickup-form'
 import AdminUserManager from '@/app/components/admin-user-manager'
 import AdminReportsManager from '@/app/components/admin-reports-manager'
+import MapView from '@/app/components/map-view'
 import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import QRCode from 'qrcode'
@@ -25,6 +26,8 @@ type PickupRequest = {
   status: string | null
   assigned_collector_id?: string | null
   created_at?: string | null
+  latitude?: number | null
+  longitude?: number | null
 }
 
 type Report = {
@@ -92,6 +95,8 @@ export default async function DashboardPage({
         : typeof metadata?.name === 'string' && metadata.name.trim()
           ? metadata.name.trim()
           : null) ?? null
+    const metadataRole = typeof metadata?.role === 'string' ? metadata.role.trim() : ''
+    const inferredRole = metadataRole === 'collector' ? 'collector' : 'user'
 
     await supabase
       .from('profiles')
@@ -99,7 +104,7 @@ export default async function DashboardPage({
         {
           id: user.id,
           full_name: fullNameFromMetadata,
-          role: 'user',
+          role: inferredRole,
         },
         { onConflict: 'id', ignoreDuplicates: true }
       )
@@ -498,7 +503,7 @@ export default async function DashboardPage({
     const error = typeof errorParam === 'string' ? errorParam : ''
     const { data: assignedRequests } = await supabase
       .from('pickup_requests')
-      .select('id, user_id, bin_id, address, notes, waste_type, status, assigned_collector_id, created_at')
+      .select('id, user_id, bin_id, address, notes, waste_type, status, assigned_collector_id, created_at, latitude, longitude')
       .eq('assigned_collector_id', user.id)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -525,6 +530,23 @@ export default async function DashboardPage({
         ? (collectorBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : ''])
         : []
     )
+    const pickupMarkers = requests
+      .map((r) => {
+        const lat = typeof r.latitude === 'number' ? r.latitude : null
+        const lng = typeof r.longitude === 'number' ? r.longitude : null
+        if (lat === null || lng === null) return null
+        const addressLabel =
+          r.address?.trim() ||
+          (r.bin_id
+            ? collectorBinCodeById.get(r.bin_id)?.trim()
+              ? collectorBinCodeById.get(r.bin_id)
+              : 'Unregistered bin'
+            : '') ||
+          r.id.slice(0, 8)
+        const label = `${addressLabel} • ${titleForWasteType(r.waste_type)} • ${titleForStatus(r.status)}`
+        return { id: r.id, lat, lng, label }
+      })
+      .filter((v): v is { id: string; lat: number; lng: number; label: string } => !!v)
 
     return (
       <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
@@ -584,6 +606,22 @@ export default async function DashboardPage({
               <div className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
                 {assignedBinLabel}
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Map</h2>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Assigned pickup locations</div>
+            </div>
+            <div className="mt-4">
+              {pickupMarkers.length === 0 ? (
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                  No pickup locations yet. Add a location when submitting a pickup request.
+                </div>
+              ) : (
+                <MapView markers={pickupMarkers} />
+              )}
             </div>
           </div>
 
@@ -730,7 +768,7 @@ export default async function DashboardPage({
 
     const requestsQuery = supabase
       .from('pickup_requests')
-      .select('id, user_id, bin_id, address, waste_type, status, assigned_collector_id, created_at')
+      .select('id, user_id, bin_id, address, waste_type, status, assigned_collector_id, created_at, latitude, longitude')
       .order('created_at', { ascending: false })
       .limit(100)
 
@@ -754,18 +792,27 @@ export default async function DashboardPage({
     const reportsFallback =
       reportsWithStatus.error &&
       reportsErrorMessage.includes('column') &&
-      (reportsErrorMessage.includes('status') || reportsErrorMessage.includes('type') || reportsErrorMessage.includes('description'))
+      (reportsErrorMessage.includes('status') ||
+        reportsErrorMessage.includes('type') ||
+        reportsErrorMessage.includes('description') ||
+        reportsErrorMessage.includes('message'))
         ? reportsErrorMessage.includes('status')
           ? await supabase
               .from('reports')
               .select('id, user_id, message, created_at')
               .order('created_at', { ascending: false })
               .limit(50)
-          : await supabase
-              .from('reports')
-              .select('id, user_id, message, created_at, status')
-              .order('created_at', { ascending: false })
-              .limit(50)
+          : reportsErrorMessage.includes('message')
+            ? await supabase
+                .from('reports')
+                .select('id, user_id, type, description, created_at, status')
+                .order('created_at', { ascending: false })
+                .limit(50)
+            : await supabase
+                .from('reports')
+                .select('id, user_id, message, created_at, status')
+                .order('created_at', { ascending: false })
+                .limit(50)
         : null
 
     const reportsStatusMissing = reportsErrorMessage.includes('column') && reportsErrorMessage.includes('status')
@@ -790,6 +837,23 @@ export default async function DashboardPage({
     const adminBinCodeById = new Map<string, string>(
       !adminBinsError ? (adminBins ?? []).map((b) => [b.id, (b.code ?? '').trim() ? (b.code as string).trim() : '']) : []
     )
+    const requestMarkers = requests
+      .map((r) => {
+        const lat = typeof r.latitude === 'number' ? r.latitude : null
+        const lng = typeof r.longitude === 'number' ? r.longitude : null
+        if (lat === null || lng === null) return null
+        const addressLabel =
+          r.address?.trim() ||
+          (r.bin_id
+            ? adminBinCodeById.get(r.bin_id)?.trim()
+              ? adminBinCodeById.get(r.bin_id)
+              : 'Unregistered bin'
+            : '') ||
+          r.id.slice(0, 8)
+        const label = `${addressLabel} • ${titleForWasteType(r.waste_type)} • ${titleForStatus(r.status)}`
+        return { id: r.id, lat, lng, label }
+      })
+      .filter((v): v is { id: string; lat: number; lng: number; label: string } => !!v)
     const reporterIds = [...new Set(reports.map((r) => r.user_id))]
     const { data: reporterProfiles } =
       reporterIds.length > 0
@@ -950,6 +1014,22 @@ export default async function DashboardPage({
               <div className="mt-1 text-2xl font-bold">{totalReportsCount ?? 0}</div>
               {unresolvedReportsCount !== null && (
                 <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{unresolvedReportsCount} unresolved</div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Requests map</h2>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Requests with attached coordinates</div>
+            </div>
+            <div className="mt-4">
+              {requestMarkers.length === 0 ? (
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                  No request locations yet. Ask residents to attach a location when submitting a pickup request.
+                </div>
+              ) : (
+                <MapView markers={requestMarkers} />
               )}
             </div>
           </div>
