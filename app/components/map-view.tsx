@@ -11,9 +11,11 @@ type MarkerData = {
 }
 
 export default function MapView({ markers }: { markers: MarkerData[] }) {
+  const center: [number, number] = [5.6037, -0.187]
+
   return (
     <MapContainer
-      center={[5.6037, -0.1870]}
+      center={center}
       zoom={12}
       scrollWheelZoom
       className="h-[500px] w-full rounded-2xl"
