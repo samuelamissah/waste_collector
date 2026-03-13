@@ -40,10 +40,10 @@ export default function Home() {
                 Go to login
               </Link>
               <Link
-                href="/dashboard"
+                href="/login?next=%2Fdashboard%23request-pickup"
                 className="inline-flex items-center justify-center rounded-lg border border-black/[.08] px-5 py-3 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
               >
-                Open dashboard
+                Request pickup
               </Link>
             </div>
 

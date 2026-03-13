@@ -34,36 +34,53 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
   }
 
   return (
-    <form onSubmit={submitRequest} className="space-y-4 rounded-2xl border p-6">
-      <h2 className="text-xl font-semibold">Request Pickup</h2>
-
+    <form onSubmit={submitRequest} className="space-y-4">
       {!binId && (
-        <input
-          className="w-full rounded-lg border p-3"
-          placeholder="Bin ID"
-          value={binIdInput}
-          onChange={(e) => setBinIdInput(e.target.value)}
-        />
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="binId">
+            Bin code
+          </label>
+          <input
+            id="binId"
+            className="w-full rounded-lg border border-black/[.08] bg-white p-3 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+            placeholder="BIN-0001"
+            value={binIdInput}
+            onChange={(e) => setBinIdInput(e.target.value)}
+          />
+        </div>
       )}
 
-      <select
-        className="w-full rounded-lg border p-3"
-        value={wasteType}
-        onChange={(e) => setWasteType(e.target.value)}
-      >
-        <option value="general">General Waste</option>
-        <option value="recyclable">Recyclable Waste</option>
-        <option value="hazardous">Hazardous Waste</option>
-      </select>
+      <div className="space-y-2">
+        <label className="text-sm font-medium" htmlFor="wasteType">
+          Waste type
+        </label>
+        <select
+          id="wasteType"
+          className="w-full rounded-lg border border-black/[.08] bg-white p-3 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+          value={wasteType}
+          onChange={(e) => setWasteType(e.target.value)}
+        >
+          <option value="general">General Waste</option>
+          <option value="recyclable">Recyclable Waste</option>
+          <option value="hazardous">Hazardous Waste</option>
+        </select>
+      </div>
 
-      <textarea
-        className="w-full rounded-lg border p-3"
-        placeholder="Extra notes"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-      />
+      <div className="space-y-2">
+        <label className="text-sm font-medium" htmlFor="notes">
+          Notes (optional)
+        </label>
+        <textarea
+          id="notes"
+          className="w-full rounded-lg border border-black/[.08] bg-white p-3 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+          placeholder="Any extra details for the collector"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={4}
+        />
+      </div>
 
-      <button className="rounded-lg bg-green-700 px-4 py-3 text-white">
+      <button className="w-full rounded-lg bg-green-700 px-4 py-3 text-white">
         Submit Request
       </button>
     </form>

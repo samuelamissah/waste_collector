@@ -3,6 +3,7 @@ import PickupForm from '@/app/components/pickup-form'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import QRCode from 'qrcode'
+import Link from 'next/link'
 
 type Profile = {
   id: string
@@ -30,12 +31,6 @@ type Report = {
   description?: string | null
   message?: string | null
   created_at?: string | null
-}
-
-function pointsForWasteType(wasteType: string | null | undefined) {
-  if (wasteType === 'recyclable') return 15
-  if (wasteType === 'hazardous') return 10
-  return 5
 }
 
 function titleForWasteType(wasteType: string | null | undefined) {
@@ -67,7 +62,7 @@ export default async function DashboardPage({
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) redirect('/login')
+  if (!user) redirect('/login?next=/dashboard')
 
   const { data: profileRow } = await supabase
     .from('profiles')
@@ -77,6 +72,16 @@ export default async function DashboardPage({
 
   const profile = (profileRow ?? null) as Profile | null
   const role = profile?.role ?? 'user'
+
+  const displayName = profile?.full_name ?? user.email ?? user.id.slice(0, 8)
+  const roleLabel = role === 'admin' ? 'Admin' : role === 'collector' ? 'Collector' : 'Resident'
+
+  async function signOut() {
+    'use server'
+    const supabase = await createClient()
+    await supabase.auth.signOut()
+    redirect('/login')
+  }
 
   async function verifyPickup(formData: FormData) {
     'use server'
@@ -249,6 +254,8 @@ export default async function DashboardPage({
   }
 
   if (role === 'collector') {
+    const errorParam = searchParams?.error
+    const error = typeof errorParam === 'string' ? errorParam : ''
     const { data: assignedRequests } = await supabase
       .from('pickup_requests')
       .select('id, user_id, bin_id, address, waste_type, status, assigned_collector_id, created_at')
@@ -259,58 +266,110 @@ export default async function DashboardPage({
     const requests = (assignedRequests ?? []) as PickupRequest[]
 
     return (
-      <div className="min-h-screen p-6">
-        <div className="mx-auto w-full max-w-5xl space-y-6">
-          <div className="rounded-2xl border p-6">
-            <h1 className="text-2xl font-bold">
-              Collector dashboard{profile?.full_name ? ` — ${profile.full_name}` : ''}
-            </h1>
-            <p className="mt-1 text-sm text-zinc-600">Assigned pickups and actions</p>
+      <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+        <header className="sticky top-0 z-10 border-b border-black/[.08] bg-zinc-50/80 backdrop-blur dark:border-white/[.145] dark:bg-black/70">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+            <div className="flex items-center gap-3">
+              <Link className="text-sm font-semibold tracking-tight" href="/">
+                Waste Collector
+              </Link>
+              <span className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                {roleLabel}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/dashboard"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/reports"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Reports
+              </Link>
+              <form action={signOut}>
+                <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
+                  Sign out
+                </button>
+              </form>
+            </div>
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <h1 className="text-2xl font-bold tracking-tight">Collector dashboard</h1>
+            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{displayName}</div>
+            <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
+              Verify the bin code before verifying or completing a pickup.
+            </p>
           </div>
 
-          <div className="rounded-2xl border p-6">
-            <h2 className="text-lg font-semibold">Assigned pickups</h2>
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <h2 className="text-lg font-semibold">Assigned pickups</h2>
+              {error === 'bin_code_mismatch' && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  Bin code mismatch. Please scan or enter the correct bin code.
+                </div>
+              )}
+            </div>
+
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b">
-                    <th className="py-2 pr-4">Address / Bin</th>
-                    <th className="py-2 pr-4">Waste type</th>
-                    <th className="py-2 pr-4">Status</th>
-                    <th className="py-2 pr-4">Requested</th>
-                    <th className="py-2 pr-4">Actions</th>
+                  <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
+                    <th className="py-3 pr-4 font-medium">Address / Bin</th>
+                    <th className="py-3 pr-4 font-medium">Waste type</th>
+                    <th className="py-3 pr-4 font-medium">Status</th>
+                    <th className="py-3 pr-4 font-medium">Requested</th>
+                    <th className="py-3 pr-4 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {requests.length === 0 ? (
                     <tr>
-                      <td className="py-4 text-zinc-600" colSpan={5}>
+                      <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={5}>
                         No assigned pickups yet.
                       </td>
                     </tr>
                   ) : (
                     requests.map((r) => (
-                      <tr key={r.id} className="border-b">
-                        <td className="py-3 pr-4">
-                          {r.address?.trim() || r.bin_id || r.id.slice(0, 8)}
+                      <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
+                        <td className="py-4 pr-4">
+                          <div className="font-medium">{r.address?.trim() || r.bin_id || r.id.slice(0, 8)}</div>
+                          {r.bin_id && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{r.bin_id}</div>}
                         </td>
-                        <td className="py-3 pr-4">{titleForWasteType(r.waste_type)}</td>
-                        <td className="py-3 pr-4">{titleForStatus(r.status)}</td>
-                        <td className="py-3 pr-4">{formatDate(r.created_at)}</td>
-                        <td className="py-3 pr-4">
-                          <div className="flex flex-wrap gap-2">
-                            <form action={verifyPickup}>
+                        <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
+                        <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
+                        <td className="py-4 pr-4">{formatDate(r.created_at)}</td>
+                        <td className="py-4 pr-4">
+                          <div className="flex flex-col gap-2">
+                            <form action={verifyPickup} className="flex flex-wrap items-center gap-2">
                               <input type="hidden" name="requestId" value={r.id} />
+                              <input
+                                className="w-44 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                name="binCode"
+                                placeholder="Enter bin code"
+                              />
                               <button
-                                className="rounded-lg border px-3 py-2"
+                                className="rounded-lg border border-black/[.08] px-3 py-2 transition-colors hover:bg-black/[.04] disabled:opacity-50 dark:border-white/[.145] dark:hover:bg-white/[.08]"
                                 type="submit"
                                 disabled={r.status === 'verified' || r.status === 'completed'}
                               >
                                 Verify pickup
                               </button>
                             </form>
-                            <form action={completePickup}>
+                            <form action={completePickup} className="flex flex-wrap items-center gap-2">
                               <input type="hidden" name="requestId" value={r.id} />
+                              <input
+                                className="w-44 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                name="binCode"
+                                placeholder="Enter bin code"
+                              />
                               <button
                                 className="rounded-lg bg-green-700 px-3 py-2 text-white disabled:bg-zinc-300"
                                 type="submit"
@@ -328,7 +387,7 @@ export default async function DashboardPage({
               </table>
             </div>
           </div>
-        </div>
+        </main>
       </div>
     )
   }
@@ -380,42 +439,77 @@ export default async function DashboardPage({
       ])
 
     return (
-      <div className="min-h-screen p-6">
-        <div className="mx-auto w-full max-w-6xl space-y-6">
-          <div className="rounded-2xl border p-6">
-            <h1 className="text-2xl font-bold">Admin</h1>
-            <p className="mt-1 text-sm text-zinc-600">Requests, assignments, reports, and statistics</p>
+      <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+        <header className="sticky top-0 z-10 border-b border-black/[.08] bg-zinc-50/80 backdrop-blur dark:border-white/[.145] dark:bg-black/70">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+            <div className="flex items-center gap-3">
+              <Link className="text-sm font-semibold tracking-tight" href="/">
+                Waste Collector
+              </Link>
+              <span className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                {roleLabel}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/dashboard"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/reports"
+                className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Reports
+              </Link>
+              <form action={signOut}>
+                <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
+                  Sign out
+                </button>
+              </form>
+            </div>
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <h1 className="text-2xl font-bold tracking-tight">Admin dashboard</h1>
+            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{displayName}</div>
+            <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
+              Filter requests, assign collectors, and review resident reports.
+            </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-5">
-            <div className="rounded-2xl border p-5">
-              <div className="text-sm text-zinc-600">Total requests</div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Total requests</div>
               <div className="mt-1 text-2xl font-bold">{totalCount ?? 0}</div>
             </div>
-            <div className="rounded-2xl border p-5">
-              <div className="text-sm text-zinc-600">Pending</div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Pending</div>
               <div className="mt-1 text-2xl font-bold">{pendingCount ?? 0}</div>
             </div>
-            <div className="rounded-2xl border p-5">
-              <div className="text-sm text-zinc-600">Assigned</div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Assigned</div>
               <div className="mt-1 text-2xl font-bold">{assignedCount ?? 0}</div>
             </div>
-            <div className="rounded-2xl border p-5">
-              <div className="text-sm text-zinc-600">Verified</div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Verified</div>
               <div className="mt-1 text-2xl font-bold">{verifiedCount ?? 0}</div>
             </div>
-            <div className="rounded-2xl border p-5">
-              <div className="text-sm text-zinc-600">Completed</div>
+            <div className="rounded-3xl border border-black/[.08] bg-white p-5 dark:border-white/[.145] dark:bg-black">
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Completed</div>
               <div className="mt-1 text-2xl font-bold">{completedCount ?? 0}</div>
             </div>
           </div>
 
-          <div className="rounded-2xl border p-6">
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <h2 className="text-lg font-semibold">All requests</h2>
               <form method="get" className="flex items-center gap-2">
                 <select
-                  className="rounded-lg border px-3 py-2"
+                  className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                   name="status"
                   defaultValue={status}
                 >
@@ -425,7 +519,10 @@ export default async function DashboardPage({
                   <option value="verified">Verified</option>
                   <option value="completed">Completed</option>
                 </select>
-                <button className="rounded-lg border px-3 py-2" type="submit">
+                <button
+                  className="rounded-lg border border-black/[.08] px-3 py-2 transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+                  type="submit"
+                >
                   Filter
                 </button>
               </form>
@@ -434,41 +531,41 @@ export default async function DashboardPage({
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b">
-                    <th className="py-2 pr-4">Request</th>
-                    <th className="py-2 pr-4">Address / Bin</th>
-                    <th className="py-2 pr-4">Waste type</th>
-                    <th className="py-2 pr-4">Status</th>
-                    <th className="py-2 pr-4">Collector</th>
-                    <th className="py-2 pr-4">Assign</th>
+                  <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
+                    <th className="py-3 pr-4 font-medium">Request</th>
+                    <th className="py-3 pr-4 font-medium">Address / Bin</th>
+                    <th className="py-3 pr-4 font-medium">Waste type</th>
+                    <th className="py-3 pr-4 font-medium">Status</th>
+                    <th className="py-3 pr-4 font-medium">Collector</th>
+                    <th className="py-3 pr-4 font-medium">Assign</th>
                   </tr>
                 </thead>
                 <tbody>
                   {requests.length === 0 ? (
                     <tr>
-                      <td className="py-4 text-zinc-600" colSpan={6}>
+                      <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={6}>
                         No requests.
                       </td>
                     </tr>
                   ) : (
                     requests.map((r) => (
-                      <tr key={r.id} className="border-b align-top">
-                        <td className="py-3 pr-4">{r.id.slice(0, 8)}</td>
-                        <td className="py-3 pr-4">{r.address?.trim() || r.bin_id || ''}</td>
-                        <td className="py-3 pr-4">{titleForWasteType(r.waste_type)}</td>
-                        <td className="py-3 pr-4">{titleForStatus(r.status)}</td>
-                        <td className="py-3 pr-4">
+                      <tr key={r.id} className="border-b border-black/[.08] align-top dark:border-white/[.145]">
+                        <td className="py-4 pr-4">{r.id.slice(0, 8)}</td>
+                        <td className="py-4 pr-4">{r.address?.trim() || r.bin_id || ''}</td>
+                        <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
+                        <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
+                        <td className="py-4 pr-4">
                           {r.assigned_collector_id
                             ? collectorRows.find((c) => c.id === r.assigned_collector_id)?.full_name ??
                               r.assigned_collector_id.slice(0, 8)
                             : '—'}
                         </td>
-                        <td className="py-3 pr-4">
+                        <td className="py-4 pr-4">
                           <form action={assignCollector} className="flex items-center gap-2">
                             <input type="hidden" name="requestId" value={r.id} />
                             <select
                               name="collectorId"
-                              className="rounded-lg border px-3 py-2"
+                              className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                               defaultValue={r.assigned_collector_id ?? ''}
                             >
                               <option value="" disabled>
@@ -480,7 +577,10 @@ export default async function DashboardPage({
                                 </option>
                               ))}
                             </select>
-                            <button className="rounded-lg border px-3 py-2" type="submit">
+                            <button
+                              className="rounded-lg border border-black/[.08] px-3 py-2 transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+                              type="submit"
+                            >
                               Assign
                             </button>
                           </form>
@@ -493,25 +593,33 @@ export default async function DashboardPage({
             </div>
           </div>
 
-          <div className="rounded-2xl border p-6">
-            <h2 className="text-lg font-semibold">Reports from residents</h2>
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Reports from residents</h2>
+              <Link
+                className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50"
+                href="/reports"
+              >
+                View all
+              </Link>
+            </div>
             <div className="mt-4 space-y-3">
               {reports.length === 0 ? (
-                <div className="text-sm text-zinc-600">No reports.</div>
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">No reports.</div>
               ) : (
                 reports.map((r) => (
-                  <div key={r.id} className="rounded-xl border p-4">
+                  <div key={r.id} className="rounded-2xl border border-black/[.08] p-4 dark:border-white/[.145]">
                     <div className="flex items-center justify-between gap-4">
                       <div className="text-sm font-medium">{r.user_id.slice(0, 8)}</div>
-                      <div className="text-xs text-zinc-600">{formatDate(r.created_at)}</div>
+                      <div className="text-xs text-zinc-600 dark:text-zinc-300">{formatDate(r.created_at)}</div>
                     </div>
-                    <div className="mt-2 text-sm text-zinc-700">{r.message ?? ''}</div>
+                    <div className="mt-2 text-sm text-zinc-700 dark:text-zinc-200">{r.message ?? ''}</div>
                   </div>
                 ))
               )}
             </div>
           </div>
-        </div>
+        </main>
       </div>
     )
   }
@@ -536,90 +644,162 @@ export default async function DashboardPage({
     created_at?: string | null
   }>
 
+  const binCode = String(profile?.bin_id ?? '').trim()
+  const binQrSvg = binCode ? await QRCode.toString(binCode, { type: 'svg', margin: 1 }) : ''
+
   return (
-    <div className="min-h-screen p-6">
-      <div className="mx-auto w-full max-w-5xl space-y-6">
-        <div className="rounded-2xl border p-6">
-          <h1 className="text-2xl font-bold">
-            Welcome{profile?.full_name ? `, ${profile.full_name}` : ''}
-          </h1>
-          <p className="mt-1 text-sm text-zinc-600">Your pickups and eco-points</p>
-          <div className="mt-4">
-            <a
-              className="inline-flex items-center rounded-lg bg-green-700 px-4 py-3 text-white"
-              href="#request-pickup"
+    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+      <header className="sticky top-0 z-10 border-b border-black/[.08] bg-zinc-50/80 backdrop-blur dark:border-white/[.145] dark:bg-black/70">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <Link className="text-sm font-semibold tracking-tight" href="/">
+              Waste Collector
+            </Link>
+            <span className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+              {roleLabel}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard"
+              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
             >
+              Dashboard
+            </Link>
+            <Link
+              href="/reports"
+              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+            >
+              Reports
+            </Link>
+            <form action={signOut}>
+              <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
+                Sign out
+              </button>
+            </form>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
+        <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+          <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+            Track your pickups, request service, and earn eco-points.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <a className="rounded-lg bg-green-700 px-4 py-3 text-sm text-white" href="#request-pickup">
               Request pickup
             </a>
+            <Link
+              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              href="/reports"
+            >
+              Report an issue
+            </Link>
           </div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl border p-6">
-            <div className="text-sm text-zinc-600">Total pickups</div>
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="text-sm text-zinc-600 dark:text-zinc-300">Total pickups</div>
             <div className="mt-1 text-3xl font-bold">{completedCount ?? 0}</div>
           </div>
-          <div className="rounded-2xl border p-6">
-            <div className="text-sm text-zinc-600">Eco-points</div>
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="text-sm text-zinc-600 dark:text-zinc-300">Eco-points</div>
             <div className="mt-1 text-3xl font-bold">{profile?.eco_points ?? 0}</div>
           </div>
         </div>
 
-        <div className="rounded-2xl border p-6">
-          <h2 className="text-lg font-semibold">Recent requests</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="py-2 pr-4">Request</th>
-                  <th className="py-2 pr-4">Waste type</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2 pr-4">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {requests.length === 0 ? (
-                  <tr>
-                    <td className="py-4 text-zinc-600" colSpan={4}>
-                      No pickup requests yet.
-                    </td>
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 md:col-span-2 dark:border-white/[.145] dark:bg-black">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Recent requests</h2>
+              <a className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-50" href="#request-pickup">
+                New request
+              </a>
+            </div>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
+                    <th className="py-3 pr-4 font-medium">Request</th>
+                    <th className="py-3 pr-4 font-medium">Waste type</th>
+                    <th className="py-3 pr-4 font-medium">Status</th>
+                    <th className="py-3 pr-4 font-medium">Created</th>
                   </tr>
-                ) : (
-                  requests.map((r) => (
-                    <tr key={r.id} className="border-b">
-                      <td className="py-3 pr-4">{r.id.slice(0, 8)}</td>
-                      <td className="py-3 pr-4">{titleForWasteType(r.waste_type)}</td>
-                      <td className="py-3 pr-4">{titleForStatus(r.status)}</td>
-                      <td className="py-3 pr-4">{formatDate(r.created_at ?? null)}</td>
+                </thead>
+                <tbody>
+                  {requests.length === 0 ? (
+                    <tr>
+                      <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={4}>
+                        No pickup requests yet.
+                      </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    requests.map((r) => (
+                      <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
+                        <td className="py-4 pr-4">{r.id.slice(0, 8)}</td>
+                        <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
+                        <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
+                        <td className="py-4 pr-4">{formatDate(r.created_at ?? null)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <h2 className="text-lg font-semibold">Your bin code</h2>
+            <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">Bin code</div>
+            <div className="mt-1 text-xl font-semibold">{binCode || 'Not set'}</div>
+            <div className="mt-4">
+              {binQrSvg ? (
+                <div
+                  className="w-44 rounded-2xl border border-black/[.08] bg-white p-3 dark:border-white/[.145]"
+                  dangerouslySetInnerHTML={{ __html: binQrSvg }}
+                />
+              ) : (
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                  Ask your admin to assign a bin code to your profile.
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div id="request-pickup" className="space-y-4">
-          <PickupForm userId={user.id} binId={(profile?.bin_id ?? undefined) || undefined} />
-          <div className="rounded-2xl border p-6">
+        <div id="request-pickup" className="scroll-mt-28 space-y-4">
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Request pickup</h2>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Bin code required</div>
+            </div>
+            <div className="mt-4">
+              <PickupForm userId={user.id} binId={(profile?.bin_id ?? undefined) || undefined} />
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <h3 className="text-base font-semibold">Points rules (MVP)</h3>
-            <div className="mt-2 grid gap-2 text-sm text-zinc-700 md:grid-cols-3">
-              <div className="rounded-xl border p-4">
+            <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+              <div className="rounded-2xl border border-black/[.08] bg-zinc-50 p-4 dark:border-white/[.145] dark:bg-zinc-900/40">
                 <div className="font-medium">General waste</div>
-                <div className="mt-1 text-zinc-600">5 points</div>
+                <div className="mt-1 text-zinc-600 dark:text-zinc-300">5 points</div>
               </div>
-              <div className="rounded-xl border p-4">
+              <div className="rounded-2xl border border-black/[.08] bg-zinc-50 p-4 dark:border-white/[.145] dark:bg-zinc-900/40">
                 <div className="font-medium">Recyclable waste</div>
-                <div className="mt-1 text-zinc-600">15 points</div>
+                <div className="mt-1 text-zinc-600 dark:text-zinc-300">15 points</div>
               </div>
-              <div className="rounded-xl border p-4">
+              <div className="rounded-2xl border border-black/[.08] bg-zinc-50 p-4 dark:border-white/[.145] dark:bg-zinc-900/40">
                 <div className="font-medium">Hazardous reported</div>
-                <div className="mt-1 text-zinc-600">10 points</div>
+                <div className="mt-1 text-zinc-600 dark:text-zinc-300">10 points</div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   )
 }
