@@ -49,7 +49,16 @@ export default async function RequestsPage({
 
   if (!user) redirect('/login?next=/requests')
 
+  async function signOut() {
+    'use server'
+    const supabase = await createClient()
+    await supabase.auth.signOut()
+    redirect('/login')
+  }
+
   const sp = (await Promise.resolve(searchParams)) ?? {}
+  const submittedParam = sp.submitted
+  const submitted = typeof submittedParam === 'string' ? submittedParam === '1' : false
   const statusParam = sp.status
   const status =
     typeof statusParam === 'string' && statusParam.trim() ? statusParam.trim() : 'all'
@@ -131,15 +140,48 @@ export default async function RequestsPage({
             >
               Profile
             </Link>
+            <form action={signOut}>
+              <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
+                Sign out
+              </button>
+            </form>
           </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
         <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
-          <h1 className="text-2xl font-bold tracking-tight">Request history</h1>
-          <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{displayName}</div>
-          <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+            Review your pickup request history and current statuses.
+          </p>
+          {submitted && (
+            <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              Pickup request submitted.
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" href="/dashboard#request-pickup">
+              Request pickup
+            </Link>
+            <Link
+              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              href="/dashboard#bin-info"
+            >
+              Bin info
+            </Link>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Request history</h2>
+              <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+                Filter and track your requests.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
             <form method="get" className="flex items-center gap-2">
               <select
                 className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
@@ -159,9 +201,7 @@ export default async function RequestsPage({
                 Filter
               </button>
             </form>
-            <Link className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" href="/dashboard#request-pickup">
-              Request pickup
-            </Link>
+          </div>
           </div>
         </div>
 

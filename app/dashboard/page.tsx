@@ -18,6 +18,7 @@ type PickupRequest = {
   user_id: string
   bin_id: string | null
   address?: string | null
+  notes?: string | null
   waste_type: string | null
   status: string | null
   assigned_collector_id?: string | null
@@ -163,6 +164,7 @@ export default async function DashboardPage({
     const request = requestRow as PickupRequest & { bin_code?: string | null }
     if (!isAdmin && request.assigned_collector_id !== user.id) return
     if (request.status === 'completed') return
+    if (request.status === 'verified') return
     if (!isAdmin) {
       let expectedBin = String(request.bin_code ?? '').trim()
       if (!expectedBin && request.bin_id && isUuid(String(request.bin_id))) {
@@ -178,10 +180,36 @@ export default async function DashboardPage({
       }
     }
 
-    await supabase
+    const verifyUpdate = await supabase
       .from('pickup_requests')
-      .update({ status: 'verified' })
+      .update({ status: 'verified', verified_at: new Date().toISOString() } as unknown as Record<string, unknown>)
       .eq('id', requestId)
+
+    if (verifyUpdate.error && verifyUpdate.error.message.toLowerCase().includes('column') && verifyUpdate.error.message.toLowerCase().includes('verified_at')) {
+      await supabase.from('pickup_requests').update({ status: 'verified' }).eq('id', requestId)
+    }
+
+    const verifyLog = await supabase.from('pickup_logs').insert({
+      request_id: requestId,
+      collector_id: user.id,
+      action: 'verified',
+    } as unknown as Record<string, unknown>)
+
+    if (
+      verifyLog.error &&
+      verifyLog.error.message.toLowerCase().includes('column') &&
+      verifyLog.error.message.toLowerCase().includes('action')
+    ) {
+      const fallbackLog = await supabase.from('pickup_logs').insert({
+        request_id: requestId,
+        collector_id: user.id,
+      })
+      if (fallbackLog.error) {
+        redirect('/dashboard?error=log_failed')
+      }
+    } else if (verifyLog.error) {
+      redirect('/dashboard?error=log_failed')
+    }
 
     revalidatePath('/dashboard')
   }
@@ -190,6 +218,8 @@ export default async function DashboardPage({
     'use server'
     const requestId = String(formData.get('requestId') ?? '')
     const binCode = String(formData.get('binCode') ?? '').trim()
+    const collectorNotes = String(formData.get('collectorNotes') ?? '').trim()
+    const weightKgRaw = String(formData.get('weightKg') ?? '').trim()
     if (!requestId) return
 
     const supabase = await createClient()
@@ -218,6 +248,9 @@ export default async function DashboardPage({
     if (!request) return
     if (!isAdmin && request.assigned_collector_id !== user.id) return
     if (request.status === 'completed') return
+    if (!isAdmin && request.status !== 'verified') {
+      redirect('/dashboard?error=must_verify_first')
+    }
 
     if (!isAdmin) {
       let expectedBin = String(request.bin_code ?? '').trim()
@@ -241,12 +274,40 @@ export default async function DashboardPage({
           ? 10
           : 5
 
-    const logInsert = await supabase.from('pickup_logs').insert({
+    let weightKg: number | null = null
+    if (weightKgRaw) {
+      const parsed = Number(weightKgRaw)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        redirect('/dashboard?error=invalid_weight')
+      }
+      weightKg = parsed
+    }
+
+    const extendedLog = await supabase.from('pickup_logs').insert({
       request_id: request.id,
       collector_id: user.id,
-    })
+      action: 'completed',
+      weight_kg: weightKg,
+      notes: collectorNotes || null,
+    } as unknown as Record<string, unknown>)
 
-    if (logInsert.error) return
+    if (
+      extendedLog.error &&
+      extendedLog.error.message.toLowerCase().includes('column') &&
+      (extendedLog.error.message.toLowerCase().includes('action') ||
+        extendedLog.error.message.toLowerCase().includes('weight_kg') ||
+        extendedLog.error.message.toLowerCase().includes('notes'))
+    ) {
+      const fallbackLog = await supabase.from('pickup_logs').insert({
+        request_id: request.id,
+        collector_id: user.id,
+      })
+      if (fallbackLog.error) {
+        redirect('/dashboard?error=log_failed')
+      }
+    } else if (extendedLog.error) {
+      redirect('/dashboard?error=log_failed')
+    }
 
     const rpcResult = await supabase.rpc('increment_eco_points', {
       user_id_input: request.user_id,
@@ -270,10 +331,14 @@ export default async function DashboardPage({
       if (pointsUpdate.error) return
     }
 
-    await supabase
+    const completionUpdate = await supabase
       .from('pickup_requests')
-      .update({ status: 'completed' })
+      .update({ status: 'completed', completed_at: new Date().toISOString() } as unknown as Record<string, unknown>)
       .eq('id', request.id)
+
+    if (completionUpdate.error && completionUpdate.error.message.toLowerCase().includes('column') && completionUpdate.error.message.toLowerCase().includes('completed_at')) {
+      await supabase.from('pickup_requests').update({ status: 'completed' }).eq('id', request.id)
+    }
 
     revalidatePath('/dashboard')
   }
@@ -318,12 +383,79 @@ export default async function DashboardPage({
     revalidatePath('/dashboard')
   }
 
+  async function createBin(formData: FormData) {
+    'use server'
+    const code = String(formData.get('code') ?? '').trim()
+    if (!code) return
+
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return
+
+    const { data: profileRow } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    if (profileRow?.role !== 'admin') return
+
+    const insert = await supabase.from('bins').insert({ code })
+    if (insert.error) {
+      const msg = insert.error.message.toLowerCase()
+      if (msg.includes('duplicate') || msg.includes('unique')) {
+        redirect('/dashboard?bins_error=duplicate')
+      }
+      if (msg.includes('row-level security') || msg.includes('rls')) {
+        redirect('/dashboard?bins_error=rls')
+      }
+      redirect('/dashboard?bins_error=unknown')
+    }
+
+    revalidatePath('/dashboard')
+    redirect('/dashboard?bins_created=1')
+  }
+
+  async function deleteBin(formData: FormData) {
+    'use server'
+    const binId = String(formData.get('binId') ?? '').trim()
+    if (!binId) return
+
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return
+
+    const { data: profileRow } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    if (profileRow?.role !== 'admin') return
+
+    const del = await supabase.from('bins').delete().eq('id', binId)
+    if (del.error) {
+      const msg = del.error.message.toLowerCase()
+      if (msg.includes('row-level security') || msg.includes('rls')) {
+        redirect('/dashboard?bins_error=rls')
+      }
+      redirect('/dashboard?bins_error=unknown')
+    }
+
+    revalidatePath('/dashboard')
+    redirect('/dashboard?bins_deleted=1')
+  }
+
   if (role === 'collector') {
     const errorParam = sp.error
     const error = typeof errorParam === 'string' ? errorParam : ''
     const { data: assignedRequests } = await supabase
       .from('pickup_requests')
-      .select('id, user_id, bin_id, address, waste_type, status, assigned_collector_id, created_at')
+      .select('id, user_id, bin_id, address, notes, waste_type, status, assigned_collector_id, created_at')
       .eq('assigned_collector_id', user.id)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -390,7 +522,7 @@ export default async function DashboardPage({
         <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <h1 className="text-2xl font-bold tracking-tight">Collector dashboard</h1>
-            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{displayName}</div>
+            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Welcome, {displayName}</div>
             <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
               Verify the bin code before verifying or completing a pickup.
             </p>
@@ -402,6 +534,21 @@ export default async function DashboardPage({
               {error === 'bin_code_mismatch' && (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
                   Bin code mismatch. Please scan or enter the correct bin code.
+                </div>
+              )}
+              {error === 'must_verify_first' && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  Verify the pickup first, then complete it.
+                </div>
+              )}
+              {error === 'invalid_weight' && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  Invalid weight. Enter a valid number.
+                </div>
+              )}
+              {error === 'log_failed' && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  Could not create a pickup log entry. Run supabase_pickup_logs_schema.sql, then try again.
                 </div>
               )}
             </div>
@@ -436,6 +583,9 @@ export default async function DashboardPage({
                               {collectorBinCodeById.get(r.bin_id) ?? r.bin_id}
                             </div>
                           )}
+                          {r.notes?.trim() && (
+                            <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{r.notes.trim()}</div>
+                          )}
                         </td>
                         <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
                         <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
@@ -464,10 +614,23 @@ export default async function DashboardPage({
                                 name="binCode"
                                 placeholder="Enter bin code or UUID"
                               />
+                              <input
+                                className="w-32 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                name="weightKg"
+                                placeholder="Weight (kg)"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                              />
+                              <input
+                                className="min-w-48 flex-1 rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                name="collectorNotes"
+                                placeholder="Collector notes (optional)"
+                              />
                               <button
                                 className="rounded-lg bg-green-700 px-3 py-2 text-white disabled:bg-zinc-300"
                                 type="submit"
-                                disabled={r.status === 'completed'}
+                                disabled={r.status !== 'verified'}
                               >
                                 Complete pickup
                               </button>
@@ -490,6 +653,13 @@ export default async function DashboardPage({
     const statusParam = sp.status
     const status =
       typeof statusParam === 'string' && statusParam.trim() ? statusParam.trim() : 'all'
+
+    const binsCreatedParam = sp.bins_created
+    const binsCreated = typeof binsCreatedParam === 'string' ? binsCreatedParam === '1' : false
+    const binsDeletedParam = sp.bins_deleted
+    const binsDeleted = typeof binsDeletedParam === 'string' ? binsDeletedParam === '1' : false
+    const binsErrorParam = sp.bins_error
+    const binsError = typeof binsErrorParam === 'string' ? binsErrorParam : ''
 
     const requestsQuery = supabase
       .from('pickup_requests')
@@ -550,6 +720,14 @@ export default async function DashboardPage({
         supabase.from('pickup_requests').select('id', { count: 'exact', head: true }).eq('status', 'completed'),
       ])
 
+    const { data: binsData, error: binsReadError } = await supabase
+      .from('bins')
+      .select('id, code')
+      .order('code', { ascending: true })
+      .limit(200)
+
+    const bins = (!binsReadError ? (binsData ?? []) : []) as Array<{ id: string; code: string | null }>
+
     return (
       <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
         <header className="sticky top-0 z-10 border-b border-black/[.08] bg-zinc-50/80 backdrop-blur dark:border-white/[.145] dark:bg-black/70">
@@ -599,7 +777,7 @@ export default async function DashboardPage({
         <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <h1 className="text-2xl font-bold tracking-tight">Admin dashboard</h1>
-            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{displayName}</div>
+            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Welcome, {displayName}</div>
             <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">
               Filter requests, assign collectors, and review resident reports.
             </p>
@@ -626,6 +804,98 @@ export default async function DashboardPage({
               <div className="text-sm text-zinc-600 dark:text-zinc-300">Completed</div>
               <div className="mt-1 text-2xl font-bold">{completedCount ?? 0}</div>
             </div>
+          </div>
+
+          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Bins</h2>
+                <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Create and manage bin codes.</div>
+              </div>
+              <form action={createBin} className="flex flex-col gap-2 md:flex-row md:items-center">
+                <input
+                  className="w-full rounded-lg border border-black/[.08] bg-white px-3 py-2 outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black md:w-56"
+                  name="code"
+                  placeholder="BIN-0001"
+                />
+                <button className="rounded-lg bg-green-700 px-4 py-2 text-sm text-white" type="submit">
+                  Add bin
+                </button>
+              </form>
+            </div>
+            {(binsCreated || binsDeleted || binsError) && (
+              <div className="mt-4 space-y-2">
+                {binsCreated && (
+                  <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                    Bin added.
+                  </div>
+                )}
+                {binsDeleted && (
+                  <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                    Bin deleted.
+                  </div>
+                )}
+                {binsError === 'duplicate' && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    That bin code already exists.
+                  </div>
+                )}
+                {binsError === 'rls' && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    Bin write blocked by RLS. Run supabase_bins_admin.sql, then try again.
+                  </div>
+                )}
+                {binsError === 'unknown' && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    Bin update failed.
+                  </div>
+                )}
+              </div>
+            )}
+            {binsReadError ? (
+              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Could not read bins: {binsReadError.message}
+              </div>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-300">
+                      <th className="py-3 pr-4 font-medium">Code</th>
+                      <th className="py-3 pr-4 font-medium">ID</th>
+                      <th className="py-3 pr-4 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bins.length === 0 ? (
+                      <tr>
+                        <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={3}>
+                          No bins yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      bins.map((b) => (
+                        <tr key={b.id} className="border-b border-black/[.08] dark:border-white/[.145]">
+                          <td className="py-4 pr-4">{b.code?.trim() ? b.code : '—'}</td>
+                          <td className="py-4 pr-4 text-xs text-zinc-600 dark:text-zinc-300">{b.id}</td>
+                          <td className="py-4 pr-4">
+                            <form action={deleteBin}>
+                              <input type="hidden" name="binId" value={b.id} />
+                              <button
+                                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                                type="submit"
+                              >
+                                Delete
+                              </button>
+                            </form>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
