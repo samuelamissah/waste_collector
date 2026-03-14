@@ -315,7 +315,7 @@ export default async function ReportsPage({
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
-          {role !== 'admin' && (
+          {role === 'user' && (
             <div className="rounded-3xl border border-black/[.08] bg-white p-6 md:col-span-1 dark:border-white/[.145] dark:bg-black">
               <h2 className="text-lg font-semibold">Submit a report</h2>
               <form action={submitReport} className="mt-4 space-y-4">

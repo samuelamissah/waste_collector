@@ -19,6 +19,16 @@ begin
     from information_schema.columns
     where table_schema = 'public'
       and table_name = 'profiles'
+      and column_name = 'email'
+  ) then
+    execute 'alter table public.profiles add column email text';
+  end if;
+
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'profiles'
       and column_name = 'role'
   ) then
     execute 'alter table public.profiles add column role text';
@@ -63,4 +73,3 @@ begin
   end if;
 end;
 $$;
-

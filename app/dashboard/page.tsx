@@ -121,6 +121,11 @@ export default async function DashboardPage({
 
   const profile = (profileRow ?? null) as Profile | null
   const role = profile?.role ?? 'user'
+
+  if (role === 'collector') {
+    redirect('/collector')
+  }
+
   const devAdminBootstrapEnabled =
     process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_ADMIN_BOOTSTRAP === '1'
 
@@ -942,6 +947,14 @@ export default async function DashboardPage({
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {role === 'admin' && (
+                <Link
+                  href="/admin"
+                  className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 transition-colors hover:bg-purple-100 dark:border-purple-900/30 dark:bg-purple-900/20 dark:text-purple-300 dark:hover:bg-purple-900/40"
+                >
+                  Admin Panel
+                </Link>
+              )}
               <Link
                 href="/dashboard"
                 className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
@@ -1312,8 +1325,16 @@ export default async function DashboardPage({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
+              {role === 'admin' && (
+                <Link
+                  href="/admin"
+                  className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 transition-colors hover:bg-purple-100 dark:border-purple-900/30 dark:bg-purple-900/20 dark:text-purple-300 dark:hover:bg-purple-900/40"
+                >
+                  Admin Panel
+                </Link>
+              )}
+              <Link
+                href="/dashboard"
               className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
             >
               Dashboard

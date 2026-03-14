@@ -30,9 +30,7 @@ export default function LoginPage() {
       return
     }
 
-    const params = new URLSearchParams(window.location.search)
-    const next = params.get('next') ?? '/dashboard'
-    router.push(next.startsWith('/') ? next : '/dashboard')
+    router.push('/dashboard')
   }
 
   return (

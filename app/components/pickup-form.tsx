@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from './toast'
+import MapView from './map-view'
 
 export default function PickupForm({ userId, binId }: { userId: string; binId?: string }) {
   const supabase = createClient()
@@ -13,9 +14,23 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
   const [wasteType, setWasteType] = useState('general')
   const [address, setAddress] = useState('')
   const [notes, setNotes] = useState('')
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
+  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy?: number | null } | null>(null)
   const [gettingLocation, setGettingLocation] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  function mapUrlForCoords(lat: number, lng: number) {
+    const url = new URL('https://www.openstreetmap.org/')
+    url.searchParams.set('mlat', String(lat))
+    url.searchParams.set('mlon', String(lng))
+    url.hash = `map=18/${lat}/${lng}`
+    return url.toString()
+  }
+
+  function formatAccuracy(value: number | null | undefined) {
+    if (typeof value !== 'number' || Number.isNaN(value)) return ''
+    if (value >= 1000) return `±${(value / 1000).toFixed(1)} km`
+    return `±${Math.round(value)} m`
+  }
 
   function isUuid(value: string) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -141,7 +156,7 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
     await new Promise<void>((resolve) => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })
           resolve()
         },
         (err) => {
@@ -203,18 +218,57 @@ export default function PickupForm({ userId, binId }: { userId: string; binId?: 
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <label className="text-sm font-medium">Location (optional)</label>
-          <button
-            type="button"
-            onClick={() => void getMyLocation()}
-            disabled={gettingLocation || loading}
-            className="rounded-lg border border-black/[.08] px-3 py-2 text-sm transition-colors hover:bg-black/[.04] disabled:opacity-60 dark:border-white/[.145] dark:hover:bg-white/[.08]"
-          >
-            {gettingLocation ? 'Getting location...' : 'Use my location'}
-          </button>
+          <div className="flex items-center gap-2">
+            {coords && (
+              <button
+                type="button"
+                onClick={() => setCoords(null)}
+                disabled={gettingLocation || loading}
+                className="rounded-lg border border-black/[.08] px-3 py-2 text-sm transition-colors hover:bg-black/[.04] disabled:opacity-60 dark:border-white/[.145] dark:hover:bg-white/[.08]"
+              >
+                Remove
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void getMyLocation()}
+              disabled={gettingLocation || loading}
+              className="rounded-lg border border-black/[.08] px-3 py-2 text-sm transition-colors hover:bg-black/[.04] disabled:opacity-60 dark:border-white/[.145] dark:hover:bg-white/[.08]"
+            >
+              {gettingLocation ? 'Getting location...' : coords ? 'Update location' : 'Use my location'}
+            </button>
+          </div>
         </div>
-        <div className="text-sm text-zinc-600 dark:text-zinc-300">
-          {coords ? `Lat ${coords.lat.toFixed(6)}, Lng ${coords.lng.toFixed(6)}` : 'No location attached.'}
-        </div>
+        {coords ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+              Location attached{formatAccuracy(coords.accuracy) ? ` (${formatAccuracy(coords.accuracy)})` : ''}
+            </span>
+            <a
+              href={mapUrlForCoords(coords.lat, coords.lng)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm font-medium text-green-700 hover:underline dark:text-green-400"
+            >
+              View on map
+            </a>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}
+            </span>
+          </div>
+        ) : (
+          <div className="text-sm text-zinc-600 dark:text-zinc-300">No location attached.</div>
+        )}
+        {coords && (
+          <div className="mt-3 overflow-hidden rounded-2xl border border-black/[.08] dark:border-white/[.145]">
+            <MapView
+              markers={[{ id: 'pickup_location', lat: coords.lat, lng: coords.lng, label: 'Pickup location' }]}
+              center={[coords.lat, coords.lng]}
+              zoom={16}
+              className="h-[220px] w-full"
+            />
+          </div>
+        )}
       </div>
 
       <div className="space-y-2">

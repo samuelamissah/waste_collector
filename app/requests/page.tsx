@@ -85,9 +85,13 @@ export default async function RequestsPage({
   const baseQuery = supabase
     .from('pickup_requests')
     .select('id, user_id, bin_id, address, waste_type, status, created_at')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .limit(100)
+
+  // Admins see all requests, users see only their own
+  if (role !== 'admin') {
+    baseQuery.eq('user_id', user.id)
+  }
+  
+  baseQuery.order('created_at', { ascending: false }).limit(100)
 
   const { data: requestRows } =
     status === 'all' ? await baseQuery : await baseQuery.eq('status', status)
@@ -236,7 +240,16 @@ export default async function RequestsPage({
                           : '—'}
                       </td>
                       <td className="py-4 pr-4">{titleForWasteType(r.waste_type)}</td>
-                      <td className="py-4 pr-4">{titleForStatus(r.status)}</td>
+                      <td className="py-4 pr-4">
+                        <span className="rounded-full border border-black/[.08] bg-white px-3 py-1 text-xs text-zinc-700 dark:border-white/[.145] dark:bg-black dark:text-zinc-200">
+                          {titleForStatus(r.status)}
+                        </span>
+                        {r.status === 'verified' && (
+                          <div className="mt-2 text-xs font-medium text-green-600 dark:text-green-400">
+                            In Progress
+                          </div>
+                        )}
+                      </td>
                       <td className="py-4 pr-4">{formatDate(r.created_at)}</td>
                     </tr>
                   ))

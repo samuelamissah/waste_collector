@@ -80,48 +80,47 @@ export default function CollectorSignupPage() {
       return
     }
 
-    if (data.user && data.session) {
-      const profileUpsert = await supabase
+    if (data.user) {
+      const upsertWithEmail = await supabase
         .from('profiles')
         .upsert(
           {
             id: data.user.id,
             full_name: fullName,
+            email,
             role: 'collector',
+            eco_points: 0,
           },
           { onConflict: 'id' }
         )
 
+      const profileUpsert =
+        upsertWithEmail.error &&
+        upsertWithEmail.error.message.toLowerCase().includes('column') &&
+        upsertWithEmail.error.message.toLowerCase().includes('email')
+          ? await supabase
+              .from('profiles')
+              .upsert(
+                { id: data.user.id, full_name: fullName, role: 'collector', eco_points: 0 },
+                { onConflict: 'id' }
+              )
+          : upsertWithEmail
+
       if (profileUpsert.error) {
         const message = profileUpsert.error.message
-        const extra =
-          message.toLowerCase().includes('row-level security') || message.toLowerCase().includes('rls')
-            ? 'Your profiles table is blocking inserts. Apply the SQL in supabase_auth_profiles.sql in your Supabase SQL editor.'
-            : 'Check that profiles has an insert policy for auth users, or use a database trigger to create profiles automatically.'
-
-        toast.warning(`${message}\n\n${extra}`, 'Account created, but profile not saved')
-      } else {
-        const profileCheck = await supabase.from('profiles').select('id').eq('id', data.user.id).maybeSingle()
-
-        if (profileCheck.error || !profileCheck.data) {
-          toast.warning(
-            profileCheck.error?.message ?? 'This is usually caused by missing Row Level Security policies on profiles.',
-            'Account created, but profile not visible'
-          )
-        }
+        const lower = message.toLowerCase()
+        const extra = lower.includes('row-level security') || lower.includes('rls') ? 'Run supabase_auth_profiles.sql.' : ''
+        toast.warning([message, extra].filter((v) => !!v).join('\n\n'), 'Account created, but profile not saved')
       }
     }
 
     if (!data.session) {
-      toast.success(
-        'Confirm your email, then come back to log in. Your profile will be created after you sign in.',
-        'Check your email'
-      )
+      toast.success('Confirm your email, then come back to log in.', 'Check your email')
     } else {
-      toast.success('Redirecting you to login.', 'Account created')
+      toast.success('Redirecting you to dashboard.', 'Account created')
     }
 
-    router.push('/login')
+    router.push(data.session ? '/dashboard' : '/login')
     setLoading(false)
   }
 
@@ -220,4 +219,3 @@ export default function CollectorSignupPage() {
     </div>
   )
 }
-
