@@ -171,6 +171,7 @@ export default function AdminUserManager({
                     </td>
                     <td className="py-4 pr-4">
                       <select
+                      title="ldskm"
                         value={entry.role}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, [u.id]: { ...entry, role: e.target.value } }))
@@ -185,6 +186,7 @@ export default function AdminUserManager({
                     </td>
                     <td className="py-4 pr-4">
                       <select
+                      title="jd"
                         value={entry.binId}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, [u.id]: { ...entry, binId: e.target.value } }))

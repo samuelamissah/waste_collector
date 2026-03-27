@@ -288,6 +288,7 @@ export default async function AdminPage({
               <form className="flex items-center gap-2" method="get">
                 <input type="hidden" name="section" value="requests" />
                 <select
+                title="kd"
                   name="status"
                   defaultValue={statusFilter}
                   className="rounded-lg border border-black/[.08] bg-white px-3 py-2 text-sm dark:border-white/[.145] dark:bg-black"
@@ -359,6 +360,7 @@ export default async function AdminPage({
                             <form action={assignCollector} className="flex items-center gap-2">
                               <input type="hidden" name="requestId" value={r.id} />
                               <select
+                              title='js'
                                 name="collectorId"
                                 defaultValue={r.assigned_collector_id || ''}
                                 className="w-40 rounded-lg border border-black/[.08] bg-transparent px-2 py-1 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"

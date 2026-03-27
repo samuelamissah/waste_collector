@@ -1252,6 +1252,7 @@ export default async function DashboardPage({
                           <form action={assignCollector} className="flex items-center gap-2">
                             <input type="hidden" name="requestId" value={r.id} />
                             <select
+                            title="kds"
                               name="collectorId"
                               className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                               defaultValue={r.assigned_collector_id ?? ''}
