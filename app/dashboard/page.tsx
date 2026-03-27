@@ -1188,6 +1188,7 @@ export default async function DashboardPage({
               <h2 className="text-lg font-semibold">All requests</h2>
               <form method="get" className="flex items-center gap-2">
                 <select
+                title="s"
                   className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                   name="status"
                   defaultValue={status}
@@ -1351,7 +1352,7 @@ export default async function DashboardPage({
 
   // Force include the assigned collector if they have coordinates, even if not picked up by the general query
   // (though the general query should catch them, this ensures they are definitely passed to the map)
-  let mapCollectorMarkers = [...activeCollectors]
+  const mapCollectorMarkers = [...activeCollectors]
 
   // Find assigned collector for any active request
   const activeRequest = requests.find(r => r.status === 'assigned' || r.status === 'verified')
