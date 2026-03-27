@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
+import { createNotification } from '@/lib/notifications'
 
 export async function assignCollector(formData: FormData) {
   const requestId = String(formData.get('requestId') ?? '')
@@ -25,7 +26,7 @@ export async function assignCollector(formData: FormData) {
 
   const { data: requestRow } = await supabase
     .from('pickup_requests')
-    .select('id, status')
+    .select('id, status, user_id')
     .eq('id', requestId)
     .maybeSingle()
 
@@ -39,6 +40,20 @@ export async function assignCollector(formData: FormData) {
       status: requestRow.status === 'pending' ? 'assigned' : requestRow.status,
     })
     .eq('id', requestId)
+
+  // Notify resident that a collector has been assigned
+  await createNotification(
+    requestRow.user_id,
+    'Collector Assigned',
+    'A collector has been assigned to your pickup request.'
+  )
+  
+  // Also notify the collector!
+  await createNotification(
+    collectorId,
+    'New Assignment',
+    'You have been assigned a new pickup request.'
+  )
 
   revalidatePath('/admin')
 }

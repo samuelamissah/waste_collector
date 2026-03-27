@@ -34,6 +34,7 @@ function formatDate(value: string | null | undefined) {
 
 import CollectorActions from '@/app/components/collector-actions'
 import CollectorLiveTracker from '@/app/components/collector-live-tracker'
+import MapView, { MarkerData, CollectorMarkerData } from '@/app/components/map-view'
 import { startPickup, completePickup, signOut } from './actions'
 
 export default async function CollectorPage({
@@ -59,7 +60,7 @@ export default async function CollectorPage({
 
   const { data: profileRow } = await supabase
     .from('profiles')
-    .select('role, full_name')
+    .select('role, full_name, current_lat, current_lng')
     .eq('id', user.id)
     .maybeSingle()
 
@@ -68,13 +69,15 @@ export default async function CollectorPage({
 
   const { data: assignedRequests } = await supabase
     .from('pickup_requests')
-    .select('id, address, waste_type, status, created_at, assigned_collector_id, bins(code)')
+    .select('id, address, waste_type, status, created_at, assigned_collector_id, latitude, longitude, bins(code)')
     .eq('assigned_collector_id', user.id)
     .order('created_at', { ascending: false })
     .limit(100)
 
   const rawRequests = (assignedRequests ?? []) as unknown as (PickupRequestRow & {
     bins: { code: string } | { code: string }[] | null
+    latitude?: number | null
+    longitude?: number | null
   })[]
 
   const requests = rawRequests.map((r) => ({
@@ -84,6 +87,26 @@ export default async function CollectorPage({
 
   const hasActivePickup = requests.some(r => r.status === 'verified')
   const displayName = profileRow?.full_name?.trim() ? profileRow.full_name : 'Collector'
+
+  // Prepare map data for collector view
+  const requestMarkers = requests
+    .filter(r => r.latitude && r.longitude && (r.status === 'assigned' || r.status === 'verified'))
+    .map(r => ({
+      id: r.id,
+      lat: r.latitude as number,
+      lng: r.longitude as number,
+      label: `${r.address || 'Pickup Request'} • ${titleForWasteType(r.waste_type)}`
+    }))
+
+  const collectorMarkers = profileRow?.current_lat && profileRow?.current_lng 
+    ? [{
+        id: `me-${user.id}`,
+        collectorId: user.id,
+        lat: profileRow.current_lat,
+        lng: profileRow.current_lng,
+        label: 'You (Current Location)'
+      }] 
+    : []
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
@@ -123,6 +146,23 @@ export default async function CollectorPage({
           <h1 className="text-2xl font-bold tracking-tight">Collector dashboard</h1>
           <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">Welcome, {displayName}</div>
           <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">Start pickups and mark them complete.</p>
+        </div>
+
+        {/* Collector Map View */}
+        <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Your Route</h2>
+            <div className="text-sm text-zinc-600 dark:text-zinc-300">
+              {requestMarkers.length > 0 ? `${requestMarkers.length} assigned locations` : 'No assigned locations with coordinates'}
+            </div>
+          </div>
+          <div className="mt-4">
+             <MapView 
+               markers={requestMarkers} 
+               collectorMarkers={collectorMarkers as CollectorMarkerData[]} 
+               className="h-[400px] w-full rounded-2xl z-0"
+             />
+          </div>
         </div>
 
         {toast && (

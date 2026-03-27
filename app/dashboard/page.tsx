@@ -3,9 +3,11 @@ import PickupForm from '@/app/components/pickup-form'
 import AdminUserManager from '@/app/components/admin-user-manager'
 import AdminReportsManager from '@/app/components/admin-reports-manager'
 import MapView from '@/app/components/map-view'
+import BinQR from '@/app/components/bin-qr'
+import NotificationCenter from '@/app/components/notification-center'
+import StatCard from '@/app/components/stat-card'
 import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
-import QRCode from 'qrcode'
 import Link from 'next/link'
 
 type Profile = {
@@ -777,21 +779,24 @@ export default async function DashboardPage({
       .order('created_at', { ascending: false })
       .limit(100)
 
-    const { data: allRequests } =
-      status === 'all' ? await requestsQuery : await requestsQuery.eq('status', status)
-
-    const { data: collectors } = await supabase
-      .from('profiles')
-      .select('id, full_name, role')
-      .eq('role', 'collector')
-      .order('full_name', { ascending: true })
-      .limit(200)
-
-    const reportsWithStatus = await supabase
-      .from('reports')
-      .select('id, user_id, type, description, message, created_at, status')
-      .order('created_at', { ascending: false })
-      .limit(50)
+    const [
+      { data: allRequests },
+      { data: collectors },
+      reportsWithStatus,
+    ] = await Promise.all([
+      status === 'all' ? requestsQuery : requestsQuery.eq('status', status),
+      supabase
+        .from('profiles')
+        .select('id, full_name, role, current_lat, current_lng, location_updated_at')
+        .eq('role', 'collector')
+        .order('full_name', { ascending: true })
+        .limit(200),
+      supabase
+        .from('reports')
+        .select('id, user_id, type, description, message, created_at, status')
+        .order('created_at', { ascending: false })
+        .limit(50),
+    ])
 
     const reportsErrorMessage = reportsWithStatus.error?.message.toLowerCase() ?? ''
     const reportsFallback =
@@ -830,6 +835,9 @@ export default async function DashboardPage({
         id: string
         full_name: string | null
         role: string | null
+        current_lat?: number | null
+        current_lng?: number | null
+        location_updated_at?: string | null
       }>
 
     const reports = (!reportsError ? (reportsData ?? []) : []) as Report[]
@@ -859,6 +867,16 @@ export default async function DashboardPage({
         return { id: r.id, lat, lng, label }
       })
       .filter((v): v is { id: string; lat: number; lng: number; label: string } => !!v)
+
+    const collectorMarkers = collectorRows
+      .filter(c => typeof c.current_lat === 'number' && typeof c.current_lng === 'number')
+      .map(c => ({
+        id: `collector-${c.id}`,
+        collectorId: c.id,
+        lat: c.current_lat as number,
+        lng: c.current_lng as number,
+        label: `Collector: ${c.full_name || 'Unknown'}`
+      }))
     const reporterIds = [...new Set(reports.map((r) => r.user_id))]
     const { data: reporterProfiles } =
       reporterIds.length > 0
@@ -1033,16 +1051,16 @@ export default async function DashboardPage({
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Requests map</h2>
-              <div className="text-sm text-zinc-600 dark:text-zinc-300">Requests with attached coordinates</div>
+              <h2 className="text-lg font-semibold">Requests & Live Collectors map</h2>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">Tracking active requests and online collectors</div>
             </div>
             <div className="mt-4">
-              {requestMarkers.length === 0 ? (
+              {requestMarkers.length === 0 && collectorMarkers.length === 0 ? (
                 <div className="text-sm text-zinc-600 dark:text-zinc-300">
-                  No request locations yet. Ask residents to attach a location when submitting a pickup request.
+                  No request locations or active collectors yet.
                 </div>
               ) : (
-                <MapView markers={requestMarkers} />
+                <MapView markers={requestMarkers} collectorMarkers={collectorMarkers} />
               )}
             </div>
           </div>
@@ -1286,12 +1304,23 @@ export default async function DashboardPage({
     .eq('user_id', user.id)
     .eq('status', 'completed')
 
-  const { data: recentRequests } = await supabase
-    .from('pickup_requests')
-    .select('id, waste_type, status, created_at')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .limit(8)
+  const [
+    { data: recentRequests },
+    { data: activeCollectorsData }
+  ] = await Promise.all([
+    supabase
+      .from('pickup_requests')
+      .select('id, waste_type, status, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(8),
+    supabase
+      .from('profiles')
+      .select('id, full_name, current_lat, current_lng, role')
+      .eq('role', 'collector')
+      .not('current_lat', 'is', null)
+      .not('current_lng', 'is', null)
+  ])
 
   const requests = (recentRequests ?? []) as Array<{
     id: string
@@ -1310,7 +1339,62 @@ export default async function DashboardPage({
         : ''
     if (code) binCode = code
   }
-  const binQrSvg = binCode ? await QRCode.toString(binCode, { type: 'svg', margin: 1 }) : ''
+  // const binQrSvg = binCode ? await QRCode.toString(binCode, { type: 'svg', margin: 1 }) : ''
+
+  const activeCollectors = (activeCollectorsData ?? []).map(c => ({
+    id: `collector-${c.id}`,
+    collectorId: c.id,
+    lat: c.current_lat as number,
+    lng: c.current_lng as number,
+    label: `Collector: ${c.full_name || 'Unknown'}`
+  }))
+
+  // Force include the assigned collector if they have coordinates, even if not picked up by the general query
+  // (though the general query should catch them, this ensures they are definitely passed to the map)
+  let mapCollectorMarkers = [...activeCollectors]
+
+  // Find assigned collector for any active request
+  const activeRequest = requests.find(r => r.status === 'assigned' || r.status === 'verified')
+  let assignedCollector = null
+  if (activeRequest) {
+    // We need to fetch the assigned collector ID from the request details first
+    const { data: requestDetails } = await supabase
+      .from('pickup_requests')
+      .select('assigned_collector_id')
+      .eq('id', activeRequest.id)
+      .maybeSingle()
+      
+    if (requestDetails?.assigned_collector_id) {
+      const { data: collectorProfile } = await supabase
+        .from('profiles')
+        .select('id, full_name, current_lat, current_lng')
+        .eq('id', requestDetails.assigned_collector_id)
+        .maybeSingle()
+        
+      if (collectorProfile) {
+        assignedCollector = {
+          id: collectorProfile.id,
+          name: collectorProfile.full_name || 'Assigned Collector',
+          lat: collectorProfile.current_lat,
+          lng: collectorProfile.current_lng
+        }
+
+        // Ensure this specific assigned collector is in the map markers list
+        if (assignedCollector.lat && assignedCollector.lng) {
+          const alreadyExists = mapCollectorMarkers.some(m => m.collectorId === collectorProfile.id)
+          if (!alreadyExists) {
+            mapCollectorMarkers.push({
+              id: `collector-${collectorProfile.id}`,
+              collectorId: collectorProfile.id,
+              lat: assignedCollector.lat,
+              lng: assignedCollector.lng,
+              label: `Collector: ${assignedCollector.name}`
+            })
+          }
+        }
+      }
+    }
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
@@ -1325,6 +1409,7 @@ export default async function DashboardPage({
             </span>
           </div>
           <div className="flex items-center gap-2">
+              <NotificationCenter userId={user.id} />
               {role === 'admin' && (
                 <Link
                   href="/admin"
@@ -1386,44 +1471,51 @@ export default async function DashboardPage({
             </div>
           </div>
         )}
-        <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
-          <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-            Track your pickups, request service, and earn eco-points.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link className="rounded-lg bg-green-700 px-4 py-3 text-sm text-white" href="/dashboard?section=request-pickup">
-              Request pickup
+        <div className="flex flex-col gap-6 md:flex-row">
+          <div className="flex-1 rounded-3xl border border-black/[.08] bg-white p-8 dark:border-white/[.145] dark:bg-black">
+            <h1 className="text-3xl font-bold tracking-tight">Welcome back, {displayName}</h1>
+            <p className="mt-2 text-zinc-600 dark:text-zinc-300">
+              Track your pickups, request service, and earn eco-points.
+            </p>
+          </div>
+          
+          <div className="flex flex-col gap-3 md:w-72 md:justify-center">
+            <Link className="flex items-center justify-center gap-2 rounded-2xl bg-green-700 px-4 py-4 text-sm font-semibold text-white transition-all hover:scale-[1.02] active:scale-[0.98]" href="/dashboard?section=request-pickup">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              Request a pickup
             </Link>
-            <Link
-              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-              href="/requests"
-            >
-              View history
-            </Link>
-            <Link
-              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-              href="/dashboard?section=bin-info"
-            >
-              Bin info
-            </Link>
-            <Link
-              className="rounded-lg border border-black/[.08] px-4 py-3 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-              href="/reports"
-            >
+            <Link className="flex items-center justify-center gap-2 rounded-2xl border border-black/[.08] bg-white px-4 py-4 text-sm font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] dark:border-white/[.145] dark:bg-black" href="/report">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               Report an issue
             </Link>
           </div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
-            <div className="text-sm text-zinc-600 dark:text-zinc-300">Total pickups</div>
-            <div className="mt-1 text-3xl font-bold">{completedCount ?? 0}</div>
+          <StatCard title="Total pickups" value={completedCount ?? 0} />
+          <StatCard title="Eco-points" value={profile?.eco_points ?? 0} colorClass="text-green-600 dark:text-green-400" />
+        </div>
+
+        <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Live tracking</h2>
+            <div className="text-sm text-zinc-600 dark:text-zinc-300">See collectors actively working in the area</div>
           </div>
-          <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
-            <div className="text-sm text-zinc-600 dark:text-zinc-300">Eco-points</div>
-            <div className="mt-1 text-3xl font-bold">{profile?.eco_points ?? 0}</div>
+          {assignedCollector && (
+            <div className="mt-3 mb-3 flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-3 text-green-800 dark:border-green-900/30 dark:bg-green-900/20 dark:text-green-300">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 dark:bg-green-800">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-truck"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+              </div>
+              <div>
+                <div className="font-semibold">Collector Assigned: {assignedCollector.name}</div>
+                <div className="text-xs opacity-80">
+                  {assignedCollector.lat && assignedCollector.lng ? 'Live location available on map' : 'Waiting for location signal...'}
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="mt-4">
+            <MapView markers={[]} collectorMarkers={mapCollectorMarkers} />
           </div>
         </div>
 
@@ -1492,11 +1584,8 @@ export default async function DashboardPage({
                 : 'Available'}
             </div>
             <div className="mt-4">
-              {binQrSvg ? (
-                <div
-                  className="w-44 rounded-2xl border border-black/[.08] bg-white p-3 dark:border-white/[.145]"
-                  dangerouslySetInnerHTML={{ __html: binQrSvg }}
-                />
+              {binCode ? (
+                <BinQR code={binCode} size={150} />
               ) : (
                 <div className="text-sm text-zinc-600 dark:text-zinc-300">
                   No bin is assigned to your profile. You can still request pickup by entering a bin code or an address.

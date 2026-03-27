@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
+import { createNotification } from '@/lib/notifications'
+
 export async function startPickup(formData: FormData) {
   const requestId = String(formData.get('requestId') ?? '').trim()
   const binCodeInput = String(formData.get('binCode') ?? '').trim()
@@ -25,7 +27,7 @@ export async function startPickup(formData: FormData) {
 
   const { data: requestRow } = await supabase
     .from('pickup_requests')
-    .select('id, status, assigned_collector_id, bins(code)')
+    .select('id, status, assigned_collector_id, user_id, bins(code)')
     .eq('id', requestId)
     .maybeSingle()
 
@@ -33,6 +35,7 @@ export async function startPickup(formData: FormData) {
     id: string
     status: string | null
     assigned_collector_id?: string | null
+    user_id: string
     bins: { code: string } | { code: string }[] | null
   } | null
 
@@ -87,6 +90,13 @@ export async function startPickup(formData: FormData) {
     redirect(`/collector?toast=Update%20failed:%20${encodeURIComponent(update.error.message)}&toast_type=error`)
   }
 
+  // Notify user that collector is on the way/verified
+  await createNotification(
+    request.user_id,
+    'Collector on the way',
+    'Your collector has verified your pickup and is on the way!'
+  )
+
   const log = await supabase
     .from('pickup_logs')
     .insert({ request_id: request.id, collector_id: user.id, action: 'verified' } as unknown as Record<string, unknown>)
@@ -123,11 +133,11 @@ export async function completePickup(formData: FormData) {
 
   const { data: requestRow } = await supabase
     .from('pickup_requests')
-    .select('id, status, assigned_collector_id')
+    .select('id, status, assigned_collector_id, waste_type, user_id')
     .eq('id', requestId)
     .maybeSingle()
 
-  const request = requestRow as { id: string; status: string | null; assigned_collector_id?: string | null } | null
+  const request = requestRow as { id: string; status: string | null; assigned_collector_id?: string | null; waste_type: string | null; user_id: string } | null
   if (!request) redirect('/collector?toast=Request%20not%20found&toast_type=error')
   if (!isAdmin && request.assigned_collector_id !== user.id) redirect('/collector?toast=Not%20assigned%20to%20you&toast_type=error')
   if (request.status === 'completed') redirect('/collector?toast=Already%20completed&toast_type=warning')
@@ -142,6 +152,42 @@ export async function completePickup(formData: FormData) {
   } else if (log.error) {
     redirect('/collector?error=log_failed')
   }
+
+  const points =
+    request.waste_type === 'recyclable'
+      ? 15
+      : request.waste_type === 'hazardous'
+        ? 10
+        : 5
+
+  const rpcResult = await supabase.rpc('increment_eco_points', {
+    user_id_input: request.user_id,
+    points_input: points,
+  })
+
+  if (rpcResult.error) {
+    console.error('Failed to award points via RPC:', rpcResult.error)
+    // Fallback: fetch and update manually
+    const { data: residentProfileRow } = await supabase
+      .from('profiles')
+      .select('eco_points')
+      .eq('id', request.user_id)
+      .maybeSingle()
+
+    const currentPoints = Number(residentProfileRow?.eco_points ?? 0)
+
+    await supabase
+      .from('profiles')
+      .update({ eco_points: currentPoints + points })
+      .eq('id', request.user_id)
+  }
+
+  // Notify user that pickup is completed and points awarded
+  await createNotification(
+    request.user_id,
+    'Pickup Completed!',
+    `Your pickup has been completed. You earned ${points} eco-points!`
+  )
 
   const update = await supabase
     .from('pickup_requests')

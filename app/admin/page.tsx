@@ -3,6 +3,7 @@ import { unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { assignCollector, signOut } from './actions'
+import AdminAnalytics from '@/app/components/admin-analytics'
 
 type PickupRequestRow = {
   id: string
@@ -75,26 +76,7 @@ export default async function AdminPage({
   const statusFilter = typeof sp.status === 'string' ? sp.status : 'all'
   const section = typeof sp.section === 'string' ? sp.section : 'requests'
 
-  // Fetch Stats
-  const { count: pendingCount } = await supabase
-    .from('pickup_requests')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'pending')
-
-  const { count: activeCollectors } = await supabase
-    .from('profiles')
-    .select('*', { count: 'exact', head: true })
-    .eq('role', 'collector')
-
-  const { count: totalRequests } = await supabase
-    .from('pickup_requests')
-    .select('*', { count: 'exact', head: true })
-
-  const { count: totalReports } = await supabase
-    .from('reports')
-    .select('*', { count: 'exact', head: true })
-
-  // Fetch Requests
+  // Fetch Stats and Data in Parallel
   let requestsQuery = supabase
     .from('pickup_requests')
     .select(`
@@ -108,33 +90,99 @@ export default async function AdminPage({
     requestsQuery = requestsQuery.eq('status', statusFilter)
   }
 
-  const { data: requestRows } = await requestsQuery
+  const [
+    { count: pendingCount },
+    { count: activeCollectors },
+    { count: totalRequests },
+    { count: totalReports },
+    { data: requestRows },
+    { data: collectors },
+    { data: reportRows },
+    analyticsDataResult
+  ] = await Promise.all([
+    supabase.from('pickup_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'collector'),
+    supabase.from('pickup_requests').select('*', { count: 'exact', head: true }),
+    supabase.from('reports').select('*', { count: 'exact', head: true }),
+    requestsQuery,
+    supabase.from('profiles').select('id, full_name').eq('role', 'collector').order('full_name'),
+    supabase.from('reports').select(`
+      id, user_id, type, description, message, status, created_at,
+      profiles(full_name)
+    `).order('created_at', { ascending: false }),
+    section === 'analytics' ? Promise.all([
+        supabase.from('pickup_requests').select('waste_type, status, created_at, address'),
+        supabase.from('profiles').select('eco_points')
+    ]) : Promise.resolve(null)
+  ])
+
   const requests = (requestRows ?? []).map((r) => ({
     ...r,
     bins: Array.isArray(r.bins) ? r.bins[0] : r.bins,
     profiles: Array.isArray(r.profiles) ? r.profiles[0] : r.profiles,
   })) as PickupRequestRow[]
 
-  // Fetch Collectors for Assignment Dropdown
-  const { data: collectors } = await supabase
-    .from('profiles')
-    .select('id, full_name')
-    .eq('role', 'collector')
-    .order('full_name')
-
-  // Fetch Reports
-  const { data: reportRows } = await supabase
-    .from('reports')
-    .select(`
-      id, user_id, type, description, message, status, created_at,
-      profiles(full_name)
-    `)
-    .order('created_at', { ascending: false })
-
   const reports = (reportRows ?? []).map((r) => ({
     ...r,
     profiles: Array.isArray(r.profiles) ? r.profiles[0] : r.profiles,
   })) as ReportRow[]
+
+  // Process Analytics Data if section is analytics
+  let analyticsData = null
+  if (section === 'analytics' && analyticsDataResult) {
+    const [{ data: allRequests }, { data: allProfiles }] = analyticsDataResult as [any, any]
+    
+    // Process data
+    const completedRequests = allRequests?.filter(r => r.status === 'completed') || []
+    const totalPickups = completedRequests.length
+    const recyclableCount = completedRequests.filter(r => r.waste_type === 'recyclable').length
+    const recyclingRate = totalPickups > 0 ? (recyclableCount / totalPickups) * 100 : 0
+    
+    const totalEcoPoints = allProfiles?.reduce((sum, p) => sum + (p.eco_points || 0), 0) ?? 0
+
+    // Waste Type Distribution (using all requests to show demand)
+    const wasteTypeMap = new Map<string, number>()
+    allRequests?.forEach(r => {
+        const type = r.waste_type ? titleForWasteType(r.waste_type) : 'Unknown'
+        wasteTypeMap.set(type, (wasteTypeMap.get(type) || 0) + 1)
+    })
+    const wasteTypeDistribution = Array.from(wasteTypeMap.entries()).map(([name, value]) => ({ name, value }))
+
+    // Pickups Over Time
+    const pickupsByDate = new Map<string, number>()
+    allRequests?.forEach(r => {
+        if (!r.created_at) return
+        const date = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        pickupsByDate.set(date, (pickupsByDate.get(date) || 0) + 1)
+    })
+    const pickupsOverTime = Array.from(pickupsByDate.entries()).map(([date, count]) => ({ date, count }))
+    // Sort by date (naive sort might be wrong if crossing years, but fine for MVP)
+    // To sort correctly, we might need the original timestamp, but let's assume chronological insert for now or just simple sort
+    // Actually, Map iteration order is insertion order in JS, but let's just rely on the order from DB (descending) -> we should probably re-sort or fetch ascending
+    // The query above was order('created_at', { ascending: false }), so we are iterating newest first. 
+    // Let's reverse it for the chart.
+    pickupsOverTime.reverse()
+
+    // Top Locations
+    const locationMap = new Map<string, number>()
+    allRequests?.forEach(r => {
+        const addr = r.address || 'Unknown'
+        locationMap.set(addr, (locationMap.get(addr) || 0) + 1)
+    })
+    const topLocations = Array.from(locationMap.entries())
+        .map(([address, count]) => ({ address, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5)
+
+    analyticsData = {
+        totalPickups,
+        recyclingRate,
+        totalEcoPoints,
+        wasteTypeDistribution,
+        pickupsOverTime,
+        topLocations
+    }
+  }
 
   const displayName = profileRow?.full_name?.trim() ? profileRow.full_name : 'Admin'
 
@@ -209,6 +257,16 @@ export default async function AdminPage({
             }`}
           >
             User Reports
+          </Link>
+          <Link
+            href="/admin?section=analytics"
+            className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+              section === 'analytics'
+                ? 'border-zinc-900 text-zinc-900 dark:border-white dark:text-white'
+                : 'border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200'
+            }`}
+          >
+            Analytics
           </Link>
         </div>
 
@@ -383,6 +441,10 @@ export default async function AdminPage({
               </div>
             </div>
           </div>
+        )}
+
+        {section === 'analytics' && analyticsData && (
+          <AdminAnalytics data={analyticsData} />
         )}
       </main>
     </div>

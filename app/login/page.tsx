@@ -19,7 +19,7 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data: authData, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
@@ -30,7 +30,23 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/dashboard')
+    if (authData.user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', authData.user.id)
+        .single()
+
+      if (profile?.role === 'admin') {
+        router.push('/admin')
+      } else if (profile?.role === 'collector') {
+        router.push('/collector')
+      } else {
+        router.push('/dashboard')
+      }
+    } else {
+      router.push('/dashboard')
+    }
   }
 
   return (

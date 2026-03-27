@@ -20,13 +20,6 @@ export default function ToastRouterListener() {
     const sp = new URLSearchParams(searchParams.toString())
     const handledKeys: string[] = []
 
-    const section = (sp.get('section') ?? '').trim()
-    if (section) {
-      const el = typeof document !== 'undefined' ? document.getElementById(section) : null
-      if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      handledKeys.push('section')
-    }
-
     const binsCreated = sp.get('bins_created') === '1'
     const binsDeleted = sp.get('bins_deleted') === '1'
     const binsError = sp.get('bins_error') ?? ''
