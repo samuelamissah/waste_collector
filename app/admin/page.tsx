@@ -96,7 +96,7 @@ export default async function AdminPage({
     { count: totalRequests },
     { count: totalReports },
     { data: requestRows },
-    { data: collectors },
+   { data: liveProfiles },
     { data: reportRows },
     analyticsDataResult
   ] = await Promise.all([
@@ -105,7 +105,12 @@ export default async function AdminPage({
     supabase.from('pickup_requests').select('*', { count: 'exact', head: true }),
     supabase.from('reports').select('*', { count: 'exact', head: true }),
     requestsQuery,
-    supabase.from('profiles').select('id, full_name').eq('role', 'collector').order('full_name'),
+   supabase
+  .from('profiles')
+  .select('id, full_name, role, current_lat, current_lng, location_updated_at')
+  .in('role', ['collector', 'resident'])
+  .order('full_name', { ascending: true })
+  .limit(500),
     supabase.from('reports').select(`
       id, user_id, type, description, message, status, created_at,
       profiles(full_name)
@@ -141,7 +146,7 @@ export default async function AdminPage({
       { data: AnalyticsRequestRow[] | null },
       { data: ProfileEco[] | null }
     ]
-    
+      
     // Process data
     const completedRequests = allRequests?.filter((r: AnalyticsRequestRow) => r.status === 'completed') || []
     const totalPickups = completedRequests.length

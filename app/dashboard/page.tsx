@@ -10,6 +10,8 @@ import StatCard from '@/app/components/stat-card'
 import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import LiveLocationTracker from '@/app/components/live-location-tracker'
+
 
 type Profile = {
   id: string
@@ -514,6 +516,43 @@ const role = profile?.role ?? 'resident'
       .limit(50)
 
     const requests = (assignedRequests ?? []) as PickupRequest[]
+    const assignedResidentIds = [
+  ...new Set(
+    requests
+      .map((r) => r.user_id)
+      .filter((v): v is string => !!v)
+  ),
+]
+
+const { data: assignedResidents } =
+  assignedResidentIds.length > 0
+    ? await supabase
+        .from('profiles')
+        .select('id, full_name, current_lat, current_lng')
+        .in('id', assignedResidentIds)
+    : await Promise.resolve({
+        data: [] as Array<{
+          id: string
+          full_name: string | null
+          current_lat?: number | null
+          current_lng?: number | null
+        }>,
+      })
+
+const residentLiveMarkers = (assignedResidents ?? [])
+  .filter(
+    (p) =>
+      typeof p.current_lat === 'number' &&
+      typeof p.current_lng === 'number'
+  )
+  .map((p) => ({
+    id: p.id,
+    lat: p.current_lat as number,
+    lng: p.current_lng as number,
+    label: `Resident: ${p.full_name || 'Unknown'}`,
+    kind: 'resident' as const,
+  }))
+
     const rawAssignedBinId = String(profile?.bin_id ?? '').trim()
     let assignedBinLabel = rawAssignedBinId ? rawAssignedBinId : 'Not set'
     if (rawAssignedBinId && isUuid(rawAssignedBinId)) {
@@ -625,8 +664,8 @@ const role = profile?.role ?? 'resident'
                   No pickup locations yet. Add a location when submitting a pickup request.
                 </div>
               ) : (
-                <MapView markers={pickupMarkers} />
-              )}
+<MapView markers={pickupMarkers} liveMarkers={residentLiveMarkers} />
+)}
             </div>
           </div>
 
@@ -752,6 +791,7 @@ const role = profile?.role ?? 'resident'
               </table>
             </div>
           </div>
+          <LiveLocationTracker userId={user.id} isTrackingEnabled={true} />
         </main>
       </div>
     )
@@ -778,23 +818,23 @@ const role = profile?.role ?? 'resident'
       .limit(100)
 
     const [
-      { data: allRequests },
-      { data: collectors },
-      reportsWithStatus,
-    ] = await Promise.all([
-      status === 'all' ? requestsQuery : requestsQuery.eq('status', status),
-      supabase
-        .from('profiles')
-        .select('id, full_name, role, current_lat, current_lng, location_updated_at')
-        .eq('role', 'collector')
-        .order('full_name', { ascending: true })
-        .limit(200),
-      supabase
-        .from('reports')
-        .select('id, user_id, type, description, message, created_at, status')
-        .order('created_at', { ascending: false })
-        .limit(50),
-    ])
+  { data: allRequests },
+  { data: liveProfiles },
+  reportsWithStatus,
+] = await Promise.all([
+  status === 'all' ? requestsQuery : requestsQuery.eq('status', status),
+  supabase
+    .from('profiles')
+    .select('id, full_name, role, current_lat, current_lng, location_updated_at')
+    .in('role', ['collector', 'resident'])
+    .order('full_name', { ascending: true })
+    .limit(500),
+  supabase
+    .from('reports')
+    .select('id, user_id, type, description, message, created_at, status')
+    .order('created_at', { ascending: false })
+    .limit(50),
+])
 
     const reportsErrorMessage = reportsWithStatus.error?.message.toLowerCase() ?? ''
     const reportsFallback =
@@ -828,15 +868,32 @@ const role = profile?.role ?? 'resident'
     const reportsError = reportsFallback?.error ?? reportsWithStatus.error
 
     const requests = (allRequests ?? []) as PickupRequest[]
-    const collectorRows =
-      (collectors ?? []).filter((c) => c.role === 'collector') as Array<{
-        id: string
-        full_name: string | null
-        role: string | null
-        current_lat?: number | null
-        current_lng?: number | null
-        location_updated_at?: string | null
-      }>
+    const liveProfileRows =
+  (liveProfiles ?? []) as Array<{
+    id: string
+    full_name: string | null
+    role: string | null
+    current_lat?: number | null
+    current_lng?: number | null
+    location_updated_at?: string | null
+  }>
+
+const collectorRows = liveProfileRows.filter((c) => c.role === 'collector')
+const adminLiveMarkers = liveProfileRows
+  .filter(
+    (p) =>
+      (p.role === 'collector' || p.role === 'resident') &&
+      typeof p.current_lat === 'number' &&
+      typeof p.current_lng === 'number'
+  )
+  .map((p) => ({
+    id: p.id,
+    lat: p.current_lat as number,
+    lng: p.current_lng as number,
+    label: `${p.role === 'collector' ? 'Collector' : 'Resident'}: ${p.full_name || 'Unknown'}`,
+    kind: p.role === 'collector' ? 'collector' as const : 'resident' as const,
+  }))
+
 
     const reports = (!reportsError ? (reportsData ?? []) : []) as Report[]
     const adminBinIds = [...new Set(requests.map((r) => r.bin_id).filter((v): v is string => !!v))]
@@ -866,15 +923,20 @@ const role = profile?.role ?? 'resident'
       })
       .filter((v): v is { id: string; lat: number; lng: number; label: string } => !!v)
 
-    const collectorMarkers = collectorRows
-      .filter(c => typeof c.current_lat === 'number' && typeof c.current_lng === 'number')
-      .map(c => ({
-        id: `collector-${c.id}`,
-        collectorId: c.id,
-        lat: c.current_lat as number,
-        lng: c.current_lng as number,
-        label: `Collector: ${c.full_name || 'Unknown'}`
-      }))
+    const liveMarkers = liveProfileRows
+  .filter(
+    (p) =>
+      (p.role === 'collector' || p.role === 'resident') &&
+      typeof p.current_lat === 'number' &&
+      typeof p.current_lng === 'number'
+  )
+  .map((p) => ({
+    id: p.id,
+    lat: p.current_lat as number,
+    lng: p.current_lng as number,
+    label: `${p.role === 'collector' ? 'Collector' : 'Resident'}: ${p.full_name || 'Unknown'}`,
+    kind: p.role === 'collector' ? 'collector' as const : 'resident' as const,
+  }))
     const reporterIds = [...new Set(reports.map((r) => r.user_id))]
     const { data: reporterProfiles } =
       reporterIds.length > 0
@@ -1053,14 +1115,14 @@ const role = profile?.role ?? 'resident'
               <div className="text-sm text-zinc-600 dark:text-zinc-300">Tracking active requests and online collectors</div>
             </div>
             <div className="mt-4">
-              {requestMarkers.length === 0 && collectorMarkers.length === 0 ? (
-                <div className="text-sm text-zinc-600 dark:text-zinc-300">
-                  No request locations or active collectors yet.
-                </div>
-              ) : (
-                <MapView markers={requestMarkers} collectorMarkers={collectorMarkers} />
-              )}
-            </div>
+ {requestMarkers.length === 0 && adminLiveMarkers.length === 0 ? (
+  <div className="text-sm text-zinc-600 dark:text-zinc-300">
+    No request locations or live users yet.
+  </div>
+) : (
+  <MapView markers={requestMarkers} liveMarkers={adminLiveMarkers} />
+)}
+</div>
           </div>
 
           <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
@@ -1453,18 +1515,7 @@ const role = profile?.role ?? 'resident'
             supabase_auth_profiles.sql. Then refresh.
           </div>
         )}
-        {devAdminBootstrapEnabled && role !== 'admin' && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>Dev admin bootstrap is enabled for this environment.</div>
-              <form action={devMakeMeAdmin}>
-                <button className="rounded-lg bg-amber-600 px-4 py-2 text-sm text-white" type="submit">
-                  Make me admin
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
+   
         <div className="flex flex-col gap-6 md:flex-row">
           <div className="flex-1 rounded-3xl border border-black/[.08] bg-white p-8 dark:border-white/[.145] dark:bg-black">
             <h1 className="text-3xl font-bold tracking-tight">Welcome back, {displayName}</h1>
@@ -1509,7 +1560,7 @@ const role = profile?.role ?? 'resident'
             </div>
           )}
           <div className="mt-4">
-            <MapView markers={[]} collectorMarkers={mapCollectorMarkers} />
+            <MapView markers={[]} liveMarkers={mapCollectorMarkers} />
           </div>
         </div>
 

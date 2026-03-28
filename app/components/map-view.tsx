@@ -11,19 +11,23 @@ export type MarkerData = {
   label: string
 }
 
-export type CollectorMarkerData = MarkerData & {
-  collectorId: string
+export type LiveMarkerData = {
+  id: string
+  lat: number
+  lng: number
+  label: string
+  kind: 'resident' | 'collector'
 }
 
 export default function MapView({
   markers,
-  collectorMarkers = [],
+  liveMarkers = [],
   center,
   zoom,
   className,
 }: {
   markers: MarkerData[]
-  collectorMarkers?: CollectorMarkerData[]
+  liveMarkers?: LiveMarkerData[]
   center?: [number, number]
   zoom?: number
   className?: string
@@ -31,36 +35,42 @@ export default function MapView({
   const [isMounted, setIsMounted] = useState(false)
   const [leaflet, setLeaflet] = useState<any>(null)
   const [reactLeaflet, setReactLeaflet] = useState<any>(null)
-  const [liveCollectors, setLiveCollectors] = useState<CollectorMarkerData[]>(collectorMarkers)
+const [livePeople, setLivePeople] = useState<LiveMarkerData[]>([])
 
   useEffect(() => {
-    // Only update if the length changed or if we don't have any collectors yet
-    // This simple check prevents infinite loops if the array reference changes but content is same
-    if (collectorMarkers.length !== liveCollectors.length) {
-      setLiveCollectors(collectorMarkers)
-    }
-  }, [collectorMarkers, liveCollectors.length])
+    setLivePeople(liveMarkers)
+  }, [liveMarkers])
 
   useEffect(() => {
     const supabase = createClient()
-    
+    const allowedIds = new Set(liveMarkers.map((m) => m.id))
+
     const channel = supabase
-      .channel('public:profiles')
+      .channel('live-map-profiles')
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles' },
         (payload) => {
-          const updatedProfile = payload.new as { id: string, current_lat?: number, current_lng?: number }
-          
-          if (updatedProfile.current_lat && updatedProfile.current_lng) {
-            setLiveCollectors((prev) => 
-              prev.map(c => 
-                c.collectorId === updatedProfile.id 
-                  ? { ...c, lat: updatedProfile.current_lat as number, lng: updatedProfile.current_lng as number }
-                  : c
-              )
-            )
+          const updated = payload.new as {
+            id: string
+            current_lat?: number | null
+            current_lng?: number | null
           }
+
+          if (!allowedIds.has(updated.id)) return
+          if (typeof updated.current_lat !== 'number' || typeof updated.current_lng !== 'number') return
+
+          setLivePeople((prev) =>
+            prev.map((person) =>
+              person.id === updated.id
+                ? {
+                    ...person,
+                    lat: updated.current_lat as number,
+                    lng: updated.current_lng as number,
+                  }
+                : person
+            )
+          )
         }
       )
       .subscribe()
@@ -68,22 +78,28 @@ export default function MapView({
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [liveMarkers])
 
   useEffect(() => {
     setIsMounted(true)
-    // Dynamically import leaflet and react-leaflet only on the client side
     Promise.all([import('leaflet'), import('react-leaflet')]).then(([L, RL]) => {
       setLeaflet(L)
       setReactLeaflet(RL)
     })
   }, [])
 
-  const computedCenter: [number, number] =
-    center ?? (markers.length > 0 ? [markers[0].lat, markers[0].lng] : [5.6037, -0.187])
-  const computedZoom = typeof zoom === 'number' ? zoom : markers.length > 0 ? 15 : 12
+  const allPoints = [
+    ...markers.map((m) => [m.lat, m.lng] as [number, number]),
+    ...livePeople.map((m) => [m.lat, m.lng] as [number, number]),
+  ]
 
-  const icon = useMemo(() => {
+  const computedCenter: [number, number] =
+    center ?? (allPoints.length > 0 ? allPoints[0] : [5.6037, -0.187])
+
+  const computedZoom =
+    typeof zoom === 'number' ? zoom : allPoints.length > 0 ? 14 : 12
+
+  const defaultIcon = useMemo(() => {
     if (!leaflet) return null
     return leaflet.default.icon({
       iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -100,19 +116,33 @@ export default function MapView({
     if (!leaflet) return null
     return leaflet.default.icon({
       iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', // We could use a truck icon here if we had one
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
       shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
       iconSize: [25, 41],
       iconAnchor: [12, 41],
       popupAnchor: [1, -34],
       shadowSize: [41, 41],
-      className: 'hue-rotate-90' // Make the collector marker a different color (greenish)
+      className: 'hue-rotate-90',
+    })
+  }, [leaflet])
+
+  const residentIcon = useMemo(() => {
+    if (!leaflet) return null
+    return leaflet.default.icon({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+      popupAnchor: [1, -34],
+      shadowSize: [41, 41],
+      className: 'hue-rotate-180',
     })
   }, [leaflet])
 
   if (!isMounted || !reactLeaflet) {
     return (
-      <div className={`${className ?? 'h-[500px] w-full rounded-2xl'} bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center`}>
+      <div className={`${className ?? 'h-[500px] w-full rounded-2xl'} flex items-center justify-center bg-zinc-100 dark:bg-zinc-900`}>
         <span className="text-sm text-zinc-500">Loading map...</span>
       </div>
     )
@@ -128,19 +158,23 @@ export default function MapView({
       className={`${className ?? 'h-[500px] w-full rounded-2xl'} z-0`}
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        attribution='&copy; OpenStreetMap contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
 
       {markers.map((marker) => (
-        <Marker key={marker.id} position={[marker.lat, marker.lng]} icon={icon ?? undefined}>
+        <Marker key={marker.id} position={[marker.lat, marker.lng]} icon={defaultIcon ?? undefined}>
           <Popup>{marker.label}</Popup>
         </Marker>
       ))}
-      
-      {liveCollectors.map((marker) => (
-        <Marker key={`collector-${marker.collectorId}`} position={[marker.lat, marker.lng]} icon={collectorIcon ?? undefined}>
-          <Popup>{marker.label}</Popup>
+
+      {livePeople.map((person) => (
+        <Marker
+          key={person.id}
+          position={[person.lat, person.lng]}
+          icon={person.kind === 'collector' ? collectorIcon ?? undefined : residentIcon ?? undefined}
+        >
+          <Popup>{person.label}</Popup>
         </Marker>
       ))}
     </MapContainer>

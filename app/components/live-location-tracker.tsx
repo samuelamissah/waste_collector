@@ -3,11 +3,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-export default function CollectorLiveTracker({
-  collectorId,
+export default function LiveLocationTracker({
+  userId,
   isTrackingEnabled,
 }: {
-  collectorId: string
+  userId: string
   isTrackingEnabled: boolean
 }) {
   const [status, setStatus] = useState<'idle' | 'tracking' | 'error'>('idle')
@@ -51,7 +51,7 @@ export default function CollectorLiveTracker({
             current_lng: longitude,
             location_updated_at: new Date().toISOString(),
           })
-          .eq('id', collectorId)
+          .eq('id', userId)
 
         if (error) {
           console.error('Failed to update live location:', error)
@@ -75,7 +75,7 @@ export default function CollectorLiveTracker({
         watchIdRef.current = null
       }
     }
-  }, [collectorId, isTrackingEnabled, supabase])
+  }, [userId, isTrackingEnabled, supabase])
 
   if (!isTrackingEnabled) return null
 
