@@ -130,19 +130,30 @@ export default async function AdminPage({
   // Process Analytics Data if section is analytics
   let analyticsData = null
   if (section === 'analytics' && analyticsDataResult) {
-    const [{ data: allRequests }, { data: allProfiles }] = analyticsDataResult as [any, any]
+    type AnalyticsRequestRow = {
+      waste_type: string | null
+      status: string | null
+      created_at?: string | null
+      address?: string | null
+    }
+    type ProfileEco = { eco_points?: number | null }
+    const [{ data: allRequests }, { data: allProfiles }] = analyticsDataResult as [
+      { data: AnalyticsRequestRow[] | null },
+      { data: ProfileEco[] | null }
+    ]
     
     // Process data
-    const completedRequests = allRequests?.filter(r => r.status === 'completed') || []
+    const completedRequests = allRequests?.filter((r: AnalyticsRequestRow) => r.status === 'completed') || []
     const totalPickups = completedRequests.length
-    const recyclableCount = completedRequests.filter(r => r.waste_type === 'recyclable').length
+    const recyclableCount = completedRequests.filter((r: AnalyticsRequestRow) => r.waste_type === 'recyclable').length
     const recyclingRate = totalPickups > 0 ? (recyclableCount / totalPickups) * 100 : 0
     
-    const totalEcoPoints = allProfiles?.reduce((sum, p) => sum + (p.eco_points || 0), 0) ?? 0
+    const totalEcoPoints =
+      allProfiles?.reduce((sum: number, p: ProfileEco) => sum + (p.eco_points || 0), 0) ?? 0
 
     // Waste Type Distribution (using all requests to show demand)
     const wasteTypeMap = new Map<string, number>()
-    allRequests?.forEach(r => {
+    allRequests?.forEach((r: AnalyticsRequestRow) => {
         const type = r.waste_type ? titleForWasteType(r.waste_type) : 'Unknown'
         wasteTypeMap.set(type, (wasteTypeMap.get(type) || 0) + 1)
     })
@@ -150,7 +161,7 @@ export default async function AdminPage({
 
     // Pickups Over Time
     const pickupsByDate = new Map<string, number>()
-    allRequests?.forEach(r => {
+    allRequests?.forEach((r: AnalyticsRequestRow) => {
         if (!r.created_at) return
         const date = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
         pickupsByDate.set(date, (pickupsByDate.get(date) || 0) + 1)
@@ -165,7 +176,7 @@ export default async function AdminPage({
 
     // Top Locations
     const locationMap = new Map<string, number>()
-    allRequests?.forEach(r => {
+    allRequests?.forEach((r: AnalyticsRequestRow) => {
         const addr = r.address || 'Unknown'
         locationMap.set(addr, (locationMap.get(addr) || 0) + 1)
     })
@@ -277,6 +288,7 @@ export default async function AdminPage({
               <form className="flex items-center gap-2" method="get">
                 <input type="hidden" name="section" value="requests" />
                 <select
+                  title='Filter requests by status'
                   name="status"
                   defaultValue={statusFilter}
                   className="rounded-lg border border-black/[.08] bg-white px-3 py-2 text-sm dark:border-white/[.145] dark:bg-black"
@@ -348,6 +360,7 @@ export default async function AdminPage({
                             <form action={assignCollector} className="flex items-center gap-2">
                               <input type="hidden" name="requestId" value={r.id} />
                               <select
+                                title='Assign collector to request'
                                 name="collectorId"
                                 defaultValue={r.assigned_collector_id || ''}
                                 className="w-40 rounded-lg border border-black/[.08] bg-transparent px-2 py-1 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"

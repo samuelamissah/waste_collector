@@ -224,6 +224,7 @@ export default function AdminReportsManager({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
+            title="Filter reports by status"
             className="rounded-lg border border-black/[.08] bg-white px-3 py-2 text-sm dark:border-white/[.145] dark:bg-black"
             value={filter}
             onChange={(e) => setFilter(e.target.value as 'all' | ReportStatus)}
@@ -300,6 +301,7 @@ export default function AdminReportsManager({
                     </td>
                     <td className="py-4 pr-4">
                       <select
+                        title='Change status of report'
                         className="rounded-lg border border-black/[.08] bg-white px-3 py-2 text-sm dark:border-white/[.145] dark:bg-black"
                         value={value}
                         onChange={(e) =>
