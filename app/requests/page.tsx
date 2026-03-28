@@ -11,6 +11,7 @@ type PickupRequestRow = {
   waste_type: string | null
   status: string | null
   created_at?: string | null
+  assigned_collector_id?: string | null
 }
 
 function titleForWasteType(wasteType: string | null | undefined) {
@@ -70,8 +71,8 @@ export default async function RequestsPage({
     .maybeSingle()
 
   const profileRow = profileFetch.data ?? null
-  const role = profileRow?.role ?? 'user'
-  const roleLabel = role === 'admin' ? 'Admin' : role === 'collector' ? 'Collector' : 'Resident'
+const role = profileRow?.role ?? 'resident'
+const roleLabel = role === 'admin' ? 'Admin' : role === 'collector' ? 'Collector' : 'Resident'
 
   const metadata = user.user_metadata as Record<string, unknown>
   const metadataName =
@@ -83,18 +84,21 @@ export default async function RequestsPage({
   const displayName = profileRow?.full_name?.trim() ? profileRow.full_name : metadataName ?? 'User'
 
   const baseQuery = supabase
-    .from('pickup_requests')
-    .select('id, user_id, bin_id, address, waste_type, status, created_at')
+  .from('pickup_requests')
+  .select('id, user_id, bin_id, address, waste_type, status, created_at, assigned_collector_id')
 
-  // Admins see all requests, users see only their own
-  if (role !== 'admin') {
-    baseQuery.eq('user_id', user.id)
-  }
-  
-  baseQuery.order('created_at', { ascending: false }).limit(100)
+// Admin sees all requests
+if (role === 'resident') {
+  baseQuery.eq('user_id', user.id)
+} else if (role === 'collector') {
+  baseQuery.eq('assigned_collector_id', user.id)
+}
 
-  const { data: requestRows } =
-    status === 'all' ? await baseQuery : await baseQuery.eq('status', status)
+baseQuery.order('created_at', { ascending: false }).limit(100)
+
+const { data: requestRows } =
+  status === 'all' ? await baseQuery : await baseQuery.eq('status', status)
+
 
   const requests = (requestRows ?? []) as PickupRequestRow[]
   const binIds = [...new Set(requests.map((r) => r.bin_id).filter((v): v is string => !!v && isUuid(v)))]
@@ -156,9 +160,13 @@ export default async function RequestsPage({
       <main className="mx-auto w-full max-w-6xl space-y-6 px-6 py-8">
         <div className="rounded-3xl border border-black/[.08] bg-white p-6 dark:border-white/[.145] dark:bg-black">
           <h1 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-            Review your pickup request history and current statuses.
-          </p>
+        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+  {role === 'admin'
+    ? 'Review all pickup requests across the system.'
+    : role === 'collector'
+      ? 'Review all pickup requests assigned to you, including completed ones.'
+      : 'Review your pickup request history and current statuses.'}
+</p>
           {submitted && (
             <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
               Pickup request submitted.
@@ -181,9 +189,13 @@ export default async function RequestsPage({
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Request history</h2>
-              <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
-                Filter and track your requests.
-              </div>
+           <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+  {role === 'admin'
+    ? 'Filter and track all requests.'
+    : role === 'collector'
+      ? 'Filter and track requests assigned to you.'
+      : 'Filter and track your requests.'}
+</div>
             </div>
             <div className="flex items-center gap-2">
             <form method="get" className="flex items-center gap-2">
@@ -224,9 +236,13 @@ export default async function RequestsPage({
               <tbody>
                 {requests.length === 0 ? (
                   <tr>
-                    <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={5}>
-                      No requests yet.
-                    </td>
+                   <td className="py-6 text-zinc-600 dark:text-zinc-300" colSpan={5}>
+  {role === 'admin'
+    ? 'No requests found.'
+    : role === 'collector'
+      ? 'No requests have been assigned to you yet.'
+      : 'No requests yet.'}
+</td>
                   </tr>
                 ) : (
                   requests.map((r) => (
