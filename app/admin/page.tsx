@@ -154,44 +154,39 @@ export default async function AdminPage({
     // Waste Type Distribution (using all requests to show demand)
     const wasteTypeMap = new Map<string, number>()
     allRequests?.forEach((r: AnalyticsRequestRow) => {
-        const type = r.waste_type ? titleForWasteType(r.waste_type) : 'Unknown'
-        wasteTypeMap.set(type, (wasteTypeMap.get(type) || 0) + 1)
+      const type = r.waste_type ? titleForWasteType(r.waste_type) : 'Unknown'
+      wasteTypeMap.set(type, (wasteTypeMap.get(type) || 0) + 1)
     })
     const wasteTypeDistribution = Array.from(wasteTypeMap.entries()).map(([name, value]) => ({ name, value }))
 
     // Pickups Over Time
     const pickupsByDate = new Map<string, number>()
     allRequests?.forEach((r: AnalyticsRequestRow) => {
-        if (!r.created_at) return
-        const date = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-        pickupsByDate.set(date, (pickupsByDate.get(date) || 0) + 1)
+      if (!r.created_at) return
+      const date = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      pickupsByDate.set(date, (pickupsByDate.get(date) || 0) + 1)
     })
     const pickupsOverTime = Array.from(pickupsByDate.entries()).map(([date, count]) => ({ date, count }))
-    // Sort by date (naive sort might be wrong if crossing years, but fine for MVP)
-    // To sort correctly, we might need the original timestamp, but let's assume chronological insert for now or just simple sort
-    // Actually, Map iteration order is insertion order in JS, but let's just rely on the order from DB (descending) -> we should probably re-sort or fetch ascending
-    // The query above was order('created_at', { ascending: false }), so we are iterating newest first. 
-    // Let's reverse it for the chart.
     pickupsOverTime.reverse()
 
     // Top Locations
     const locationMap = new Map<string, number>()
     allRequests?.forEach((r: AnalyticsRequestRow) => {
-        const addr = r.address || 'Unknown'
-        locationMap.set(addr, (locationMap.get(addr) || 0) + 1)
+      const addr = r.address || 'Unknown'
+      locationMap.set(addr, (locationMap.get(addr) || 0) + 1)
     })
     const topLocations = Array.from(locationMap.entries())
-        .map(([address, count]) => ({ address, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 5)
+      .map(([address, count]) => ({ address, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
 
     analyticsData = {
-        totalPickups,
-        recyclingRate,
-        totalEcoPoints,
-        wasteTypeDistribution,
-        pickupsOverTime,
-        topLocations
+      totalPickups,
+      recyclingRate,
+      totalEcoPoints,
+      wasteTypeDistribution,
+      pickupsOverTime,
+      topLocations
     }
   }
 

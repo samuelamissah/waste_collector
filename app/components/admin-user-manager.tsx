@@ -98,7 +98,7 @@ export default function AdminUserManager({
 
     const update = await supabase
       .from('profiles')
-      .update({ role: nextRole, bin_id: nextBinId } as unknown as Record<string, unknown>)
+      .update({ role: nextRole, bin_id: nextBinId })
       .eq('id', userId)
 
     if (update.error) {
@@ -171,6 +171,7 @@ export default function AdminUserManager({
                     </td>
                     <td className="py-4 pr-4">
                       <select
+                        title="Select user role"
                         value={entry.role}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, [u.id]: { ...entry, role: e.target.value } }))
@@ -185,6 +186,7 @@ export default function AdminUserManager({
                     </td>
                     <td className="py-4 pr-4">
                       <select
+                        title="Assign bin to user"
                         value={entry.binId}
                         onChange={(e) =>
                           setDraft((prev) => ({ ...prev, [u.id]: { ...entry, binId: e.target.value } }))

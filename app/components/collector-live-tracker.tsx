@@ -22,7 +22,9 @@ export default function CollectorLiveTracker({
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
       }
-      setStatus('idle')
+// Removed synchronous setState call to avoid cascading renders
+      // Clear error message on next render by updating state outside the effect
+      queueMicrotask(() => setErrorMessage(''))
       return
     }
 
@@ -33,6 +35,7 @@ export default function CollectorLiveTracker({
     }
 
     setStatus('tracking')
+    setErrorMessage('')
     
     watchIdRef.current = navigator.geolocation.watchPosition(
       async (position) => {
@@ -43,22 +46,27 @@ export default function CollectorLiveTracker({
 
         const { latitude, longitude } = position.coords
 
-        const { error } = await supabase
-          .from('profiles')
-          .update({
-            current_lat: latitude,
-            current_lng: longitude,
-            location_updated_at: new Date().toISOString()
-          })
-          .eq('id', collectorId)
+        try {
+          const { error } = await supabase
+            .from('profiles')
+            .update({
+              current_lat: latitude,
+              current_lng: longitude,
+              location_updated_at: new Date().toISOString()
+            })
+            .eq('id', collectorId)
 
-        if (error) {
-          console.error('Failed to update live location:', error)
-          // Don't change status to error on every failure to avoid flickering UI, 
-          // but we log it for debugging
+          if (error) {
+            console.error('Failed to update live location:', error)
+            // Don't change status to error on every failure to avoid flickering UI, 
+            // but we log it for debugging
+          }
+        } catch (err) {
+          console.error('Error updating location:', err)
         }
       },
       (error) => {
+        console.error('Geolocation watch error:', error)
         setStatus('error')
         setErrorMessage(`Location error: ${error.message}`)
       },
@@ -72,6 +80,7 @@ export default function CollectorLiveTracker({
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
       }
     }
   }, [collectorId, isTrackingEnabled, supabase])
@@ -90,6 +99,12 @@ export default function CollectorLiveTracker({
         <>
           <div className="h-2 w-2 rounded-full bg-red-500"></div>
           <span className="font-medium text-red-700 dark:text-red-400">Tracking failed: {errorMessage}</span>
+        </>
+      )}
+      {status === 'idle' && (
+        <>
+          <div className="h-2 w-2 rounded-full bg-gray-500"></div>
+          <span className="font-medium text-zinc-500 dark:text-zinc-400">Tracking inactive</span>
         </>
       )}
     </div>

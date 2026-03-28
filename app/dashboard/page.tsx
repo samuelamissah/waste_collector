@@ -1,3 +1,4 @@
+// app/dashboard/page.tsx
 import { createClient } from '@/lib/supabase/server'
 import PickupForm from '@/app/components/pickup-form'
 import AdminUserManager from '@/app/components/admin-user-manager'
@@ -72,9 +73,14 @@ export default async function DashboardPage({
 }) {
   noStore()
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  
+  // ✅ Use getUser() for security - verifies with Supabase Auth server
+  const { data: { user }, error: userError } = await supabase.auth.getUser()
+
+  if (userError) {
+    console.error('Auth error:', userError.message)
+    redirect('/login?next=/dashboard')
+  }
 
   if (!user) redirect('/login?next=/dashboard')
 
@@ -98,7 +104,12 @@ export default async function DashboardPage({
           ? metadata.name.trim()
           : null) ?? null
     const metadataRole = typeof metadata?.role === 'string' ? metadata.role.trim() : ''
-    const inferredRole = metadataRole === 'collector' ? 'collector' : 'user'
+const inferredRole =
+  metadataRole === 'collector'
+    ? 'collector'
+    : metadataRole === 'admin'
+      ? 'admin'
+      : 'resident'
 
     await supabase
       .from('profiles')
@@ -122,11 +133,7 @@ export default async function DashboardPage({
   }
 
   const profile = (profileRow ?? null) as Profile | null
-  const role = profile?.role ?? 'user'
-
-  if (role === 'collector') {
-    redirect('/collector')
-  }
+const role = profile?.role ?? 'resident'
 
   const devAdminBootstrapEnabled =
     process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_ADMIN_BOOTSTRAP === '1'
@@ -156,9 +163,7 @@ export default async function DashboardPage({
     }
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) redirect('/login?next=/dashboard')
 
     const update = await supabase.from('profiles').update({ role: 'admin' }).eq('id', user.id)
@@ -177,9 +182,7 @@ export default async function DashboardPage({
     if (!requestId) return
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: profileRow } = await supabase
@@ -262,9 +265,7 @@ export default async function DashboardPage({
     if (!requestId) return
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: profileRow } = await supabase
@@ -390,9 +391,7 @@ export default async function DashboardPage({
     if (!requestId || !collectorId) return
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: profileRow } = await supabase
@@ -433,9 +432,7 @@ export default async function DashboardPage({
     }
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: profileRow } = await supabase
@@ -477,9 +474,7 @@ export default async function DashboardPage({
     if (!binId) return
 
     const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: profileRow } = await supabase
@@ -504,6 +499,9 @@ export default async function DashboardPage({
     revalidatePath('/dashboard')
     redirect('/dashboard?bins_deleted=1')
   }
+
+  // The rest of your dashboard code continues here...
+  // (The collector, admin, and resident views remain the same)
 
   if (role === 'collector') {
     const errorParam = sp.error
@@ -666,7 +664,7 @@ export default async function DashboardPage({
                     <th className="py-3 pr-4 font-medium">Status</th>
                     <th className="py-3 pr-4 font-medium">Requested</th>
                     <th className="py-3 pr-4 font-medium">Actions</th>
-                  </tr>
+                   </tr>
                 </thead>
                 <tbody>
                   {requests.length === 0 ? (
@@ -1188,7 +1186,7 @@ export default async function DashboardPage({
               <h2 className="text-lg font-semibold">All requests</h2>
               <form method="get" className="flex items-center gap-2">
                 <select
-                title=''
+                  title="Filter requests by status"
                   className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                   name="status"
                   defaultValue={status}
@@ -1252,6 +1250,7 @@ export default async function DashboardPage({
                           <form action={assignCollector} className="flex items-center gap-2">
                             <input type="hidden" name="requestId" value={r.id} />
                             <select
+                              title="Assign collector to request"
                               name="collectorId"
                               className="rounded-lg border border-black/[.08] bg-white px-3 py-2 dark:border-white/[.145] dark:bg-black"
                               defaultValue={r.assigned_collector_id ?? ''}
@@ -1340,7 +1339,6 @@ export default async function DashboardPage({
         : ''
     if (code) binCode = code
   }
-  // const binQrSvg = binCode ? await QRCode.toString(binCode, { type: 'svg', margin: 1 }) : ''
 
   const activeCollectors = (activeCollectorsData ?? []).map(c => ({
     id: `collector-${c.id}`,
@@ -1350,15 +1348,11 @@ export default async function DashboardPage({
     label: `Collector: ${c.full_name || 'Unknown'}`
   }))
 
-  // Force include the assigned collector if they have coordinates, even if not picked up by the general query
-  // (though the general query should catch them, this ensures they are definitely passed to the map)
-  let mapCollectorMarkers = [...activeCollectors]
+  const mapCollectorMarkers = [...activeCollectors]
 
-  // Find assigned collector for any active request
-  const activeRequest = requests.find(r => r.status === 'assigned' || r.status === 'verified')
   let assignedCollector = null
+  const activeRequest = requests.find(r => r.status === 'assigned' || r.status === 'verified')
   if (activeRequest) {
-    // We need to fetch the assigned collector ID from the request details first
     const { data: requestDetails } = await supabase
       .from('pickup_requests')
       .select('assigned_collector_id')
@@ -1380,7 +1374,6 @@ export default async function DashboardPage({
           lng: collectorProfile.current_lng
         }
 
-        // Ensure this specific assigned collector is in the map markers list
         if (assignedCollector.lat && assignedCollector.lng) {
           const alreadyExists = mapCollectorMarkers.some(m => m.collectorId === collectorProfile.id)
           if (!alreadyExists) {
@@ -1410,17 +1403,17 @@ export default async function DashboardPage({
             </span>
           </div>
           <div className="flex items-center gap-2">
-              <NotificationCenter userId={user.id} />
-              {role === 'admin' && (
-                <Link
-                  href="/admin"
-                  className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 transition-colors hover:bg-purple-100 dark:border-purple-900/30 dark:bg-purple-900/20 dark:text-purple-300 dark:hover:bg-purple-900/40"
-                >
-                  Admin Panel
-                </Link>
-              )}
+            <NotificationCenter userId={user.id} />
+            {role === 'admin' && (
               <Link
-                href="/dashboard"
+                href="/admin"
+                className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 transition-colors hover:bg-purple-100 dark:border-purple-900/30 dark:bg-purple-900/20 dark:text-purple-300 dark:hover:bg-purple-900/40"
+              >
+                Admin Panel
+              </Link>
+            )}
+            <Link
+              href="/dashboard"
               className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
             >
               Dashboard
@@ -1547,7 +1540,7 @@ export default async function DashboardPage({
                     <th className="py-3 pr-4 font-medium">Waste type</th>
                     <th className="py-3 pr-4 font-medium">Status</th>
                     <th className="py-3 pr-4 font-medium">Created</th>
-                  </tr>
+                   </tr>
                 </thead>
                 <tbody>
                   {requests.length === 0 ? (

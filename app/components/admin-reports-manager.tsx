@@ -187,7 +187,7 @@ export default function AdminReportsManager({
 
     const update = await supabase
       .from('reports')
-      .update({ status: nextStatus, updated_at: new Date().toISOString() } as unknown as Record<string, unknown>)
+      .update({ status: nextStatus, updated_at: new Date().toISOString() })
       .eq('id', reportId)
 
     if (update.error) {

@@ -1,15 +1,17 @@
+// proxy.ts
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
-  const response = NextResponse.next()
+  let response = NextResponse.next({ request })
 
-  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
-  const supabaseUrl =
-    envUrl.startsWith('http://') || envUrl.startsWith('https://') ? envUrl : 'http://localhost:54321'
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
-  const supabaseAnonKey = envKey.trim() ? envKey : 'public-anon-key'
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('Missing Supabase environment variables')
+    return response
+  }
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -17,7 +19,10 @@ export async function proxy(request: NextRequest) {
         return request.cookies.getAll()
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options))
+        cookiesToSet.forEach(({ name, value, options }) => {
+          request.cookies.set(name, value)
+          response.cookies.set(name, value, options)
+        })
       },
     },
   })
@@ -27,27 +32,34 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
-  const isProtected =
-    pathname.startsWith('/dashboard') || pathname.startsWith('/reports') || pathname.startsWith('/profile')
 
-  if (!user && isProtected) {
-    const loginUrl = request.nextUrl.clone()
-    loginUrl.pathname = '/login'
-    loginUrl.searchParams.set('next', `${pathname}${request.nextUrl.search}`)
-    return NextResponse.redirect(loginUrl)
+  const isPublicRoute =
+    pathname === '/' ||
+    pathname === '/login' ||
+    pathname === '/signup' ||
+    pathname === '/collector-signup'
+
+  if (!user && !isPublicRoute) {
+    const url = new URL('/login', request.url)
+    url.searchParams.set('next', pathname)
+    return NextResponse.redirect(url)
   }
 
-  if (user && (pathname === '/login' || pathname === '/signup')) {
-    const dashboardUrl = request.nextUrl.clone()
-    dashboardUrl.pathname = '/dashboard'
-    dashboardUrl.search = ''
-    return NextResponse.redirect(dashboardUrl)
+  if (
+    user &&
+    (pathname === '/login' ||
+      pathname === '/signup' ||
+      pathname === '/collector-signup')
+  ) {
+    const url = new URL('/dashboard', request.url)
+    return NextResponse.redirect(url)
   }
 
   return response
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/reports/:path*', '/profile/:path*', '/login', '/signup'],
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
 }
-

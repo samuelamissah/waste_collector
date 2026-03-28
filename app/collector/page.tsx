@@ -1,7 +1,10 @@
+// app/collector/page.tsx
 import { createClient } from '@/lib/supabase/server'
-import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
+import { unstable_noStore as noStore } from 'next/cache'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import CollectorLiveTracker from '@/app/components/collector-live-tracker'
+import MapView from '@/app/components/map-view'
 
 type PickupRequestRow = {
   id: string
@@ -10,6 +13,9 @@ type PickupRequestRow = {
   status: string | null
   created_at?: string | null
   assigned_collector_id?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  bins?: { code: string } | { code: string }[] | null
 }
 
 function titleForWasteType(wasteType: string | null | undefined) {
@@ -32,10 +38,155 @@ function formatDate(value: string | null | undefined) {
   return date.toLocaleString()
 }
 
-import CollectorActions from '@/app/components/collector-actions'
-import CollectorLiveTracker from '@/app/components/collector-live-tracker'
-import MapView, { MarkerData, CollectorMarkerData } from '@/app/components/map-view'
-import { startPickup, completePickup, signOut } from './actions'
+async function signOutAction() {
+  'use server'
+  const supabase = await createClient()
+  await supabase.auth.signOut()
+  redirect('/login')
+}
+
+async function startPickupAction(formData: FormData) {
+  'use server'
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  
+  if (!user) {
+    redirect('/login')
+  }
+
+  const requestId = formData.get('requestId') as string
+  const binCode = formData.get('binCode') as string
+  const lat = formData.get('lat') as string
+  const lng = formData.get('lng') as string
+
+  if (!requestId) {
+    redirect('/collector?error=missing_request_id')
+  }
+
+  // Verify the request belongs to this collector
+  const { data: request } = await supabase
+    .from('pickup_requests')
+    .select('status, assigned_collector_id, bin_id, bins(code)')
+    .eq('id', requestId)
+    .single()
+
+  if (!request) {
+    redirect('/collector?error=request_not_found')
+  }
+
+  if (request.assigned_collector_id !== user.id) {
+    redirect('/collector?error=not_authorized')
+  }
+
+  if (request.status === 'completed') {
+    redirect('/collector?error=already_completed')
+  }
+
+  // Verify bin code if required
+  if (binCode) {
+    let expectedBinCode = null
+    
+    if (request.bins && typeof request.bins === 'object' && 'code' in request.bins) {
+      expectedBinCode = (request.bins as { code: string }).code
+    } else if (request.bin_id) {
+      const { data: bin } = await supabase
+        .from('bins')
+        .select('code')
+        .eq('id', request.bin_id)
+        .single()
+      expectedBinCode = bin?.code
+    }
+
+    if (expectedBinCode && binCode !== expectedBinCode) {
+      redirect('/collector?error=bin_code_mismatch')
+    }
+  }
+
+  // Update the request status to verified
+  await supabase
+    .from('pickup_requests')
+    .update({ 
+      status: 'verified',
+      start_location_lat: lat ? parseFloat(lat) : null,
+      start_location_lng: lng ? parseFloat(lng) : null,
+      verified_at: new Date().toISOString()
+    })
+    .eq('id', requestId)
+
+  redirect('/collector?toast=Pickup%20started&toast_type=success')
+}
+
+async function completePickupAction(formData: FormData) {
+  'use server'
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  
+  if (!user) {
+    redirect('/login')
+  }
+
+  const requestId = formData.get('requestId') as string
+  const weightKg = formData.get('weightKg') as string
+  const collectorNotes = formData.get('collectorNotes') as string
+  const lat = formData.get('lat') as string
+  const lng = formData.get('lng') as string
+
+  if (!requestId) {
+    redirect('/collector?error=missing_request_id')
+  }
+
+  // Verify the request belongs to this collector
+  const { data: request } = await supabase
+    .from('pickup_requests')
+    .select('status, assigned_collector_id, user_id, waste_type')
+    .eq('id', requestId)
+    .single()
+
+  if (!request) {
+    redirect('/collector?error=request_not_found')
+  }
+
+  if (request.assigned_collector_id !== user.id) {
+    redirect('/collector?error=not_authorized')
+  }
+
+  if (request.status !== 'verified') {
+    redirect('/collector?error=must_verify_first')
+  }
+
+  // Calculate points based on waste type
+  const points = request.waste_type === 'recyclable' ? 15 
+    : request.waste_type === 'hazardous' ? 10 
+    : 5
+
+  // Update the request status to completed
+  await supabase
+    .from('pickup_requests')
+    .update({ 
+      status: 'completed',
+      end_location_lat: lat ? parseFloat(lat) : null,
+      end_location_lng: lng ? parseFloat(lng) : null,
+      completed_at: new Date().toISOString(),
+      weight_kg: weightKg ? parseFloat(weightKg) : null,
+      collector_notes: collectorNotes || null
+    })
+    .eq('id', requestId)
+
+  // Award points to the resident
+  const { data: resident } = await supabase
+    .from('profiles')
+    .select('eco_points')
+    .eq('id', request.user_id)
+    .single()
+
+  const currentPoints = resident?.eco_points || 0
+  await supabase
+    .from('profiles')
+    .update({ eco_points: currentPoints + points })
+    .eq('id', request.user_id)
+
+  redirect('/collector?toast=Pickup%20completed&toast_type=success')
+}
 
 export default async function CollectorPage({
   searchParams,
@@ -44,11 +195,12 @@ export default async function CollectorPage({
 }) {
   noStore()
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { data: { user }, error: userError } = await supabase.auth.getUser()
 
-  if (!user) redirect('/login?next=/collector')
+  if (userError || !user) {
+    console.error('Auth error:', userError?.message)
+    redirect('/login?next=/collector')
+  }
 
   const sp = (await Promise.resolve(searchParams)) ?? {}
   const toastParam = sp.toast
@@ -58,14 +210,26 @@ export default async function CollectorPage({
   const errorParam = sp.error
   const error = typeof errorParam === 'string' ? errorParam : ''
 
-  const { data: profileRow } = await supabase
-    .from('profiles')
-    .select('role, full_name, current_lat, current_lng')
-    .eq('id', user.id)
-    .maybeSingle()
+ const { data: profileRow, error: profileError } = await supabase
+  .from('profiles')
+  .select('role, full_name, current_lat, current_lng')
+  .eq('id', user.id)
+  .maybeSingle()
 
-  const role = profileRow?.role ?? 'user'
-  if (role !== 'collector' && role !== 'admin') redirect('/dashboard')
+const metadata = user.user_metadata as Record<string, unknown>
+const metadataRole =
+  typeof metadata?.role === 'string' ? metadata.role.trim() : ''
+
+const role = profileRow?.role ?? metadataRole ?? ''
+
+if (role === 'admin') {
+  redirect('/admin')
+}
+
+// only redirect away if we are sure the user is not a collector
+if (role && role !== 'collector') {
+  redirect('/dashboard')
+}
 
   const { data: assignedRequests } = await supabase
     .from('pickup_requests')
@@ -74,11 +238,7 @@ export default async function CollectorPage({
     .order('created_at', { ascending: false })
     .limit(100)
 
-  const rawRequests = (assignedRequests ?? []) as unknown as (PickupRequestRow & {
-    bins: { code: string } | { code: string }[] | null
-    latitude?: number | null
-    longitude?: number | null
-  })[]
+  const rawRequests = (assignedRequests ?? []) as unknown as PickupRequestRow[]
 
   const requests = rawRequests.map((r) => ({
     ...r,
@@ -121,13 +281,7 @@ export default async function CollectorPage({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Link
-              href="/collector"
-              className="rounded-lg border border-black/[.08] px-4 py-2 text-sm transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-white/[.08]"
-            >
-              Dashboard
-            </Link>
-            <form action={signOut}>
+            <form action={signOutAction}>
               <button
                 className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 transition-colors hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-950/50"
                 type="submit"
@@ -157,11 +311,11 @@ export default async function CollectorPage({
             </div>
           </div>
           <div className="mt-4">
-             <MapView 
-               markers={requestMarkers} 
-               collectorMarkers={collectorMarkers as CollectorMarkerData[]} 
-               className="h-[400px] w-full rounded-2xl z-0"
-             />
+            <MapView 
+              markers={requestMarkers} 
+              collectorMarkers={collectorMarkers} 
+              className="h-[400px] w-full rounded-2xl z-0"
+            />
           </div>
         </div>
 
@@ -200,7 +354,7 @@ export default async function CollectorPage({
                   <th className="py-3 pr-4 font-medium">Request time</th>
                   <th className="py-3 pr-4 font-medium">Status</th>
                   <th className="py-3 pr-4 font-medium">Actions</th>
-                </tr>
+                 </tr>
               </thead>
               <tbody>
                 {requests.length === 0 ? (
@@ -214,8 +368,7 @@ export default async function CollectorPage({
                     const status = String(r.status ?? '').trim()
                     const isVerified = status === 'verified'
                     const isCompleted = status === 'completed'
-                    const showVerify = !isVerified && !isCompleted
-                    const showComplete = isVerified && !isCompleted
+                    const hasBinCode = !!r.bins?.code
 
                     return (
                       <tr key={r.id} className="border-b border-black/[.08] dark:border-white/[.145]">
@@ -243,35 +396,42 @@ export default async function CollectorPage({
                           </span>
                         </td>
                         <td className="py-4 pr-4">
-                          <div className="flex flex-col gap-2">
-                            {showVerify && (
-                              <CollectorActions
-                                requestId={r.id}
-                                hasBinCode={!!r.bins?.code}
-                                mode="start"
-                                startPickup={startPickup}
-                                completePickup={completePickup}
-                              />
-                            )}
-                            {showComplete && (
-                              <CollectorActions
-                                requestId={r.id}
-                                hasBinCode={false}
-                                mode="complete"
-                                startPickup={startPickup}
-                                completePickup={completePickup}
-                              />
-                            )}
-                            {showComplete && (
-                               <div className="hidden">
-                                 {/* Helper to keep the layout consistent if needed, but CollectorActions handles verify/start/complete buttons */}
-                               </div>
-                            )}
-                            {/* We need to adjust CollectorActions to handle the "Complete" state separately or pass a mode. 
-                                Actually, the previous tool created a component that shows EITHER Verify/Start OR nothing. 
-                                Let's update the usage to fit the existing logic.
-                            */}
-                          </div>
+                          {!isCompleted && (
+                            <form action={isVerified ? completePickupAction : startPickupAction} className="flex flex-col gap-2">
+                              <input type="hidden" name="requestId" value={r.id} />
+                              {!isVerified && hasBinCode && (
+                                <input
+                                  type="text"
+                                  name="binCode"
+                                  placeholder="Bin Code"
+                                  className="w-28 rounded-lg border border-black/[.08] bg-white px-2 py-1 text-sm outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                  required
+                                />
+                              )}
+                              {isVerified && (
+                                <>
+                                  <input
+                                    type="text"
+                                    name="weightKg"
+                                    placeholder="Weight (kg)"
+                                    className="w-32 rounded-lg border border-black/[.08] bg-white px-2 py-1 text-sm outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                  />
+                                  <input
+                                    type="text"
+                                    name="collectorNotes"
+                                    placeholder="Notes"
+                                    className="w-40 rounded-lg border border-black/[.08] bg-white px-2 py-1 text-sm outline-none focus:border-green-700 dark:border-white/[.145] dark:bg-black"
+                                  />
+                                </>
+                              )}
+                              <button
+                                type="submit"
+                                className="rounded-md bg-zinc-900 px-3 py-1 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-black dark:hover:bg-zinc-200"
+                              >
+                                {isVerified ? 'Complete Pickup' : 'Start Pickup'}
+                              </button>
+                            </form>
+                          )}
                         </td>
                       </tr>
                     )
@@ -285,4 +445,3 @@ export default async function CollectorPage({
     </div>
   )
 }
-

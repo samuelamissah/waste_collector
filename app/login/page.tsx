@@ -1,52 +1,77 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useToast } from '../components/toast'
 
 export default function LoginPage() {
   const supabase = createClient()
-  const router = useRouter()
   const toast = useToast()
-
+  const [checkingAuth, setCheckingAuth] = useState(true)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    async function checkUser() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+
+        if (session?.user) {
+          window.location.assign('/dashboard')
+        } else {
+          setCheckingAuth(false)
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err)
+        setCheckingAuth(false)
+      }
+    }
+
+    checkUser()
+  }, [supabase])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
 
-    const { data: authData, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
 
-    if (error) {
-      toast.error(error.message, 'Login failed')
-      setLoading(false)
-      return
-    }
-
-    if (authData.user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', authData.user.id)
-        .single()
-
-      if (profile?.role === 'admin') {
-        router.push('/admin')
-      } else if (profile?.role === 'collector') {
-        router.push('/collector')
-      } else {
-        router.push('/dashboard')
+      if (error) {
+        toast.error(error.message, 'Login failed')
+        setLoading(false)
+        return
       }
-    } else {
-      router.push('/dashboard')
+
+      if (!data.user) {
+        toast.error('No user data received', 'Login failed')
+        setLoading(false)
+        return
+      }
+
+      window.location.assign('/dashboard')
+    } catch (err: any) {
+      console.error('Login error:', err)
+      toast.error(err.message || 'An error occurred', 'Login failed')
+      setLoading(false)
     }
+  }
+
+  if (checkingAuth) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="mb-4 text-lg">Loading...</div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -93,6 +118,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  required
                 />
               </div>
 
@@ -107,11 +133,12 @@ export default function LoginPage() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  required
                 />
               </div>
 
               <button
-                className="w-full rounded-lg bg-green-700 px-4 py-3 text-white disabled:bg-zinc-300"
+                className="w-full rounded-lg bg-green-700 px-4 py-3 text-white transition-colors hover:bg-green-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
                 disabled={loading || !email.trim() || !password.trim()}
                 type="submit"
               >
@@ -119,18 +146,9 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <div className="mt-6 rounded-2xl border border-black/[.08] bg-zinc-50 p-4 text-sm text-zinc-700 dark:border-white/[.145] dark:bg-zinc-900/40 dark:text-zinc-200">
-              <div className="font-semibold">Admin login</div>
-              <div className="mt-1">
-                Admin access is role-based. Set <span className="font-medium">profiles.role</span> to{' '}
-                <span className="font-medium">admin</span> for your user in Supabase, then log in
-                normally.
-              </div>
-            </div>
-
             <div className="mt-6 text-center text-sm text-zinc-600 dark:text-zinc-300">
               Don’t have an account?{' '}
-              <Link href="/signup" className="font-medium text-zinc-900 dark:text-zinc-50">
+              <Link href="/signup" className="font-medium text-zinc-900 hover:underline dark:text-zinc-50">
                 Sign up
               </Link>
             </div>
