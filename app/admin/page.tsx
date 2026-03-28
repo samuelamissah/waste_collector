@@ -127,6 +127,18 @@ export default async function AdminPage({
     profiles: Array.isArray(r.profiles) ? r.profiles[0] : r.profiles,
   })) as PickupRequestRow[]
 
+  const liveProfileRows = (liveProfiles ?? []) as Array<{
+  id: string
+  full_name: string | null
+  role: string | null
+  current_lat?: number | null
+  current_lng?: number | null
+  location_updated_at?: string | null
+}>
+
+const collectorRows = liveProfileRows.filter((p) => p.role === 'collector')
+
+
   const reports = (reportRows ?? []).map((r) => ({
     ...r,
     profiles: Array.isArray(r.profiles) ? r.profiles[0] : r.profiles,
@@ -146,7 +158,7 @@ export default async function AdminPage({
       { data: AnalyticsRequestRow[] | null },
       { data: ProfileEco[] | null }
     ]
-      
+
     // Process data
     const completedRequests = allRequests?.filter((r: AnalyticsRequestRow) => r.status === 'completed') || []
     const totalPickups = completedRequests.length
@@ -367,7 +379,7 @@ export default async function AdminPage({
                                 disabled={r.status === 'completed'}
                               >
                                 <option value="">Unassigned</option>
-                                {collectors?.map((c) => (
+                                {collectorRows?.map((c) => (
                                   <option key={c.id} value={c.id}>
                                     {c.full_name}
                                   </option>

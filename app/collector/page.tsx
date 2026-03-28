@@ -261,11 +261,11 @@ if (role && role !== 'collector') {
   const collectorMarkers = profileRow?.current_lat && profileRow?.current_lng 
     ? [{
         id: `me-${user.id}`,
-        collectorId: user.id,
         lat: profileRow.current_lat,
         lng: profileRow.current_lng,
-        label: 'You (Current Location)'
-      }] 
+        label: 'You (Current Location)',
+        kind:'collector' as const,
+     }] 
     : []
 
   return (
@@ -313,7 +313,7 @@ if (role && role !== 'collector') {
           <div className="mt-4">
             <MapView 
               markers={requestMarkers} 
-              collectorMarkers={collectorMarkers} 
+              liveMarkers={collectorMarkers} 
               className="h-[400px] w-full rounded-2xl z-0"
             />
           </div>

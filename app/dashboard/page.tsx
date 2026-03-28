@@ -1402,15 +1402,15 @@ const adminLiveMarkers = liveProfileRows
     if (code) binCode = code
   }
 
-  const activeCollectors = (activeCollectorsData ?? []).map(c => ({
-    id: `collector-${c.id}`,
-    collectorId: c.id,
-    lat: c.current_lat as number,
-    lng: c.current_lng as number,
-    label: `Collector: ${c.full_name || 'Unknown'}`
-  }))
+ const activeCollectors = (activeCollectorsData ?? []).map((c) => ({
+  id: c.id,
+  lat: c.current_lat as number,
+  lng: c.current_lng as number,
+  label: `Collector: ${c.full_name || 'Unknown'}`,
+  kind: 'collector' as const,
+}))
 
-  const mapCollectorMarkers = [...activeCollectors]
+const mapCollectorMarkers = [...activeCollectors]
 
   let assignedCollector = null
   const activeRequest = requests.find(r => r.status === 'assigned' || r.status === 'verified')
@@ -1437,15 +1437,15 @@ const adminLiveMarkers = liveProfileRows
         }
 
         if (assignedCollector.lat && assignedCollector.lng) {
-          const alreadyExists = mapCollectorMarkers.some(m => m.collectorId === collectorProfile.id)
+          const alreadyExists = mapCollectorMarkers.some((m) => m.id === collectorProfile.id)
           if (!alreadyExists) {
             mapCollectorMarkers.push({
-              id: `collector-${collectorProfile.id}`,
-              collectorId: collectorProfile.id,
-              lat: assignedCollector.lat,
-              lng: assignedCollector.lng,
-              label: `Collector: ${assignedCollector.name}`
-            })
+  id: collectorProfile.id,
+  lat: assignedCollector.lat,
+  lng: assignedCollector.lng,
+  label: `Collector: ${collectorProfile.full_name || 'Unknown'}`,
+  kind: 'collector' as const,
+})
           }
         }
       }

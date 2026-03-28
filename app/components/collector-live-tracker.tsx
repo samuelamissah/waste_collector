@@ -22,7 +22,7 @@ export default function CollectorLiveTracker({
         navigator.geolocation.clearWatch(watchIdRef.current)
         watchIdRef.current = null
       }
-      setStatus('idle')
+      /* status already 'idle' from initial state or cleanup, no need to setState here */
       setErrorMessage('')
       return
     }
